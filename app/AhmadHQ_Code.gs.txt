@@ -1,0 +1,85 @@
+const HQ = {
+  spreadsheetId: '1_zaAT-zqEQhwTW2ZNRLSnH8Peed7zZTzi3kd0RUHQRQ',
+  workSheet: 'WORK DESK — UPDATE',
+  closeSheet: 'WEEK CLOSE — UPDATE'
+};
+
+function doGet() {
+  return HtmlService.createTemplateFromFile('Index').evaluate()
+    .setTitle('Ahmad HQ')
+    .setXFrameOptionsMode(HtmlService.XFrameOptionsMode.ALLOWALL);
+}
+
+function include(filename) {
+  return HtmlService.createHtmlOutputFromFile(filename).getContent();
+}
+
+function getBootstrap() {
+  const ss = SpreadsheetApp.openById(HQ.spreadsheetId);
+  return {
+    work: readObjects_(ss.getSheetByName(HQ.workSheet)),
+    controls: readObjects_(ss.getSheetByName(HQ.closeSheet)),
+    user: Session.getActiveUser().getEmail(),
+    generatedAt: new Date().toISOString()
+  };
+}
+
+function saveWork(update) {
+  const ss = SpreadsheetApp.openById(HQ.spreadsheetId);
+  const sh = ss.getSheetByName(HQ.workSheet);
+  const headers = sh.getRange(5,1,1,21).getDisplayValues()[0];
+  const ids = sh.getRange(6,1,Math.max(sh.getLastRow()-5,1),1).getDisplayValues().flat();
+  const idx = ids.indexOf(update.id);
+  if (idx < 0) throw new Error('Work item not found: ' + update.id);
+  const row = idx + 6;
+  const map = headerMap_(headers);
+  const allowed = {
+    status:'Status', waitingOn:'Waiting On', blocked:'Blocked?', result:'Result / Completion Note',
+    evidence:'Evidence / Drive Link', plannedDay:'PLANNED DAY', why:'WHY / OUTCOME SUPPORTED'
+  };
+  Object.keys(allowed).forEach(k => {
+    if (update[k] !== undefined) sh.getRange(row, map[allowed[k]] + 1).setValue(update[k]);
+  });
+  sh.getRange(row, map['Last Update'] + 1).setValue(new Date());
+  if (update.status === 'Done' || update.status === 'Completed') {
+    sh.getRange(row, map['COMPLETED AT'] + 1).setValue(new Date());
+  }
+  return {ok:true};
+}
+
+function saveControl(update) {
+  const ss = SpreadsheetApp.openById(HQ.spreadsheetId);
+  const sh = ss.getSheetByName(HQ.closeSheet);
+  const headers = sh.getRange(1,1,1,10).getDisplayValues()[0];
+  const ids = sh.getRange(2,1,Math.max(sh.getLastRow()-1,1),1).getDisplayValues().flat();
+  const idx = ids.indexOf(update.id);
+  if (idx < 0) throw new Error('Control not found: ' + update.id);
+  const row = idx + 2, map = headerMap_(headers);
+  if (update.status !== undefined) sh.getRange(row,map['Status']+1).setValue(update.status);
+  if (update.evidence !== undefined) sh.getRange(row,map['Evidence / Link']+1).setValue(update.evidence);
+  if (update.exception !== undefined) sh.getRange(row,map['Exception?']+1).setValue(update.exception);
+  if (update.notes !== undefined) sh.getRange(row,map['Notes / Next Action']+1).setValue(update.notes);
+  return {ok:true};
+}
+
+function addWork(item) {
+  const ss = SpreadsheetApp.openById(HQ.spreadsheetId);
+  const sh = ss.getSheetByName(HQ.workSheet);
+  const last = sh.getLastRow();
+  const ids = sh.getRange(6,1,Math.max(last-5,1),1).getDisplayValues().flat().filter(Boolean);
+  const max = ids.reduce((m,id)=>Math.max(m,Number(String(id).replace(/\D/g,''))||0),0);
+  const id = 'W-' + String(max+1).padStart(3,'0');
+  const now = new Date();
+  sh.appendRow([id,item.function||'',item.action||'',item.owner||'',item.type||'Action',item.priority||'PUSH',item.critical?'Yes':'No',item.resultProducing?'Yes':'No',item.due||'',item.status||'Open',item.waitingOn||'',item.blocked?'Yes':'No','',item.evidence||'',now,now,item.escalate?'Yes':'No',item.plannedDay||'',item.why||'','','0d']);
+  return {ok:true,id};
+}
+
+function readObjects_(sh) {
+  if (!sh) return [];
+  const headerRow = sh.getName() === HQ.workSheet ? 5 : 1;
+  const width = sh.getName() === HQ.workSheet ? 21 : 10;
+  const values = sh.getRange(headerRow,1,Math.max(sh.getLastRow()-headerRow+1,1),width).getDisplayValues();
+  const headers = values.shift();
+  return values.filter(r=>r.some(Boolean)).map(r=>Object.fromEntries(headers.map((h,i)=>[h,r[i]])));
+}
+function headerMap_(headers){ return Object.fromEntries(headers.map((h,i)=>[h,i])); }
