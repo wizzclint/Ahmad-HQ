@@ -54,7 +54,7 @@ async function getSheets() {
   return google.sheets({ version: "v4", auth });
 }
 
-async function readSheet(sheetName: string, headerRow: number, width: string) {
+export async function readSheet(sheetName: string, headerRow: number, width: string) {
   const response = await (await getSheets()).spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${sheetName}!A${headerRow}:${width}` });
   return rowsFromValues((response.data.values ?? []) as string[][]);
 }
