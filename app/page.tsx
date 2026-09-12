@@ -9,7 +9,8 @@ type View =
   | "home" | "work" | "operate" | "manage" | "close" | "intel"
   | "customers" | "decisions" | "add"
   | "store" | "edible" | "gardenia" | "finance" | "legacy"
-  | "property" | "people" | "podcast" | "personal" | "iron";
+  | "property" | "people" | "podcast" | "personal" | "iron"
+  | "techBacklog";
 
 const emptyData: HqBootstrap = {
   work: [], controls: [], user: "", generatedAt: "", source: "demo",
@@ -18,6 +19,7 @@ const emptyData: HqBootstrap = {
   gardeniaPipeline: [], gardeniaProduct: [], checklistDefs: [], checklistRuns: [],
   legacy: [], alerts: [], property: [], financeReg: [], podcast: [], personalReg: [],
   requests: [], training: [], systemAccess: [], periods: [], notes: [], activity: [],
+  techBacklog: [],
 };
 
 const closed = (v = "") => /done|complete|closed/i.test(v);
@@ -495,6 +497,7 @@ export default function HomePage() {
     ["home", "HOME", "▣"], ["work", "MY WORK", "✓"], ["manage", "MANAGE", "◎"],
     ...areas.map(a => [a.id, a.label, a.icon] as [View, string, string]),
     ["close", "CLOSE / REVIEW", "✓"], ["intel", "INTELLIGENCE", "⌁"],
+    ["techBacklog", "TECH BACKLOG", "⚙"],
   ];
 
   // Helpers for editable tables
@@ -675,6 +678,13 @@ export default function HomePage() {
         </>
       );
 
+      case "techBacklog": return (
+        <>
+          <Header title="Tech Backlog" subtitle="Technology, design and execution — scope, links, feedback and completion" data={data} />
+          <Section title="Full Backlog">{edt("HQ_TECH_BACKLOG", data.techBacklog, ["ID", "Mini Project", "Clinton Task", "Priority", "Status", "Reviewer / Approver", "Timing", "Owner"])}</Section>
+        </>
+      );
+
       case "add": return (
         <>
           <Header title="Capture / Inbox" subtitle="Turn a thought, request, or next action into a managed record." data={data} />
@@ -756,4 +766,5 @@ const sheetToKey: Record<string, string> = {
   HQ_PERSONAL_REGISTER: "personalReg", HQ_REQUESTS: "requests",
   HQ_TRAINING: "training", HQ_SYSTEM_ACCESS: "systemAccess",
   HQ_PERIODS: "periods", HQ_NOTES: "notes", HQ_ACTIVITY: "activity",
+  HQ_TECH_BACKLOG: "techBacklog",
 };

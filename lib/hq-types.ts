@@ -34,6 +34,7 @@ export type HqBootstrap = {
   periods: SheetRow[];
   notes: SheetRow[];
   activity: SheetRow[];
+  techBacklog: SheetRow[];
 };
 
 export type HqUser = {

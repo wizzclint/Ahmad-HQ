@@ -276,6 +276,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
       legacy: EMPTY, alerts: EMPTY, property: EMPTY, financeReg: EMPTY,
       podcast: EMPTY, personalReg: EMPTY, requests: EMPTY, training: EMPTY,
       systemAccess: EMPTY, periods: EMPTY, notes: EMPTY, activity: EMPTY,
+      techBacklog: EMPTY,
     };
   }
 
@@ -287,6 +288,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
     gardeniaPipeline, gardeniaProduct, checklistDefs, checklistRuns,
     legacy, alerts, property, financeReg, podcast, personalReg,
     requests, training, systemAccess, periods, notes, activity,
+    techBacklog,
   ] = await Promise.all([
     readSheet(process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE", 5, "U"),
     readSheet(process.env.GOOGLE_CLOSE_SHEET ?? "WEEK CLOSE — UPDATE", 1, "J"),
@@ -302,6 +304,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
     s("HQ_REQUESTS"), s("HQ_TRAINING"),
     s("HQ_SYSTEM_ACCESS"), s("HQ_PERIODS"),
     s("HQ_NOTES"), s("HQ_ACTIVITY"),
+    s("HQ_TECH_BACKLOG"),
   ]);
 
   const raw: HqBootstrap = {
@@ -313,6 +316,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
     gardeniaPipeline, gardeniaProduct, checklistDefs, checklistRuns,
     legacy, alerts, property, financeReg, podcast, personalReg,
     requests, training, systemAccess, periods, notes, activity,
+    techBacklog,
   };
 
   return user ? filterBootstrapForUser(raw, user) : raw;
