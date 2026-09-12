@@ -242,6 +242,56 @@ function Kpi({ label, value, detail, tone }: { label: string; value: number | st
   return <div className={`card kpi ${tone}`}><span className="label">{label}</span><strong>{value}</strong><small>{detail}</small></div>;
 }
 
+// ── First-time guidance tour ──────────────────────────────────────────────
+const guideSteps: { title: string; body: string }[] = [
+  {
+    title: "Welcome to Ahmad HQ",
+    body: "This is the management system for capturing work, running weekly controls, and tracking every operating area in one place. This quick guide walks through what each section is for — it only takes a minute, and you can reopen it anytime from the \"? Guide\" button in the sidebar.",
+  },
+  {
+    title: "Home, My Work, Manage",
+    body: "HOME is your daily snapshot — open work, critical moves, blocked items, and active alerts across everything. MY WORK lists every work item assigned anywhere, so you can see status, owner, and due dates in one list. MANAGE holds plans, periods, and incoming requests — the higher-level planning layer above day-to-day work.",
+  },
+  {
+    title: "Operating area tabs",
+    body: "Each business area — Edible, Gardenia's Fire, Finance & Office, Legacy Closeout, Property, People & Systems, Podcast & Legacy, Personal/Ahmad, Iron Marks — has its own tab. Opening one shows only that area's work items plus the registers specific to it (e.g. Finance & Office shows the Finance Register; Gardenia's Fire shows its Sales Pipeline). Use these when you want to focus on one part of the business instead of everything at once.",
+  },
+  {
+    title: "Close / Review and Intelligence",
+    body: "CLOSE / REVIEW is where weekly controls get signed off and checklists get run — this is the accountability layer: did the recurring things that must happen, actually happen? INTELLIGENCE is the numbers view — Key Status Indicators, targets, and budgets — for tracking performance over time rather than individual tasks.",
+  },
+  {
+    title: "Quick actions",
+    body: "Under QUICK in the sidebar: \"Capture / Inbox\" is the fastest way to turn a thought or request into a tracked work item — use it the moment something comes up so it doesn't get lost. Customers and Decisions are dedicated views for customer relationship data and logged decisions/exceptions. You're all set — click below to start using the system.",
+  },
+];
+
+function GuideTour({ onClose }: { onClose: () => void }) {
+  const [step, setStep] = useState(0);
+  const last = step === guideSteps.length - 1;
+  const current = guideSteps[step];
+  return (
+    <div className="guide-overlay" role="dialog" aria-modal="true" aria-label="Ahmad HQ guide">
+      <div className="guide-card">
+        <div className="guide-progress">
+          {guideSteps.map((_, i) => <span key={i} className={`guide-dot ${i === step ? "active" : ""}`} />)}
+        </div>
+        <h2>{current.title}</h2>
+        <p>{current.body}</p>
+        <div className="guide-actions">
+          <button className="link-button" onClick={onClose}>Skip guide</button>
+          <div style={{ display: "flex", gap: 10 }}>
+            {step > 0 && <button className="btn" onClick={() => setStep(s => s - 1)}>Back</button>}
+            <button className="btn primary" onClick={() => (last ? onClose() : setStep(s => s + 1))}>
+              {last ? "Got it, let's go" : "Next"}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const areas: { id: View; label: string; icon: string; match: string[] }[] = [
   { id: "store", label: "EDIBLE - STORE", icon: "▦", match: ["edible"] },
   { id: "edible", label: "EDIBLE - MANAGEMENT", icon: "▤", match: ["edible"] },
@@ -318,20 +368,43 @@ export default function HomePage() {
   const [selectedFunction, setSelectedFunction] = useState(functions[0]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [showGuide, setShowGuide] = useState(false);
 
   useEffect(() => {
-    if (status === "authenticated") {
-      fetch("/api/hq")
-        .then(async res => {
-          const payload = await res.json();
-          if (!res.ok || !Array.isArray(payload.work)) throw new Error(payload.message || payload.error || "Could not load workspace.");
-          setData({ ...emptyData, ...payload });
-        })
-        .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not load workspace."))
-        .finally(() => setLoading(false));
-    } else if (status === "unauthenticated") {
-      setLoading(false);
+    if (status !== "authenticated" || !session?.user?.email) return;
+    try {
+      const key = `ahq-guide-seen:${session.user.email.toLowerCase()}`;
+      // localStorage is a browser-only external system that can't be read during render/SSR,
+      // so this genuinely has to happen post-mount in an effect rather than being derived.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
+      if (!localStorage.getItem(key)) setShowGuide(true);
+    } catch {
+      // localStorage can be unavailable (private browsing, etc.) — just skip the tour rather than error.
     }
+  }, [status, session?.user?.email]);
+
+  function dismissGuide() {
+    setShowGuide(false);
+    try {
+      if (session?.user?.email) localStorage.setItem(`ahq-guide-seen:${session.user.email.toLowerCase()}`, "1");
+    } catch {
+      // ignore — worst case the guide reappears next visit
+    }
+  }
+
+  useEffect(() => {
+    // `loading` is only ever read once status is "authenticated" (the "unauthenticated"
+    // case short-circuits to the sign-in screen before renderView()/loading matter), so
+    // there's nothing to set here when the user isn't signed in.
+    if (status !== "authenticated") return;
+    fetch("/api/hq")
+      .then(async res => {
+        const payload = await res.json();
+        if (!res.ok || !Array.isArray(payload.work)) throw new Error(payload.message || payload.error || "Could not load workspace.");
+        setData({ ...emptyData, ...payload });
+      })
+      .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not load workspace."))
+      .finally(() => setLoading(false));
   }, [status]);
 
   const areaRows = useMemo(() => {
@@ -406,10 +479,12 @@ export default function HomePage() {
   async function addWork(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     const form = new FormData(event.currentTarget);
-    const row: SheetRow = { ID: `LOCAL-${Date.now()}`, "Project / Function": String(form.get("function") || ""), "Work Item / Next Action": String(form.get("action") || ""), Owner: String(form.get("owner") || "Ahmad"), Status: "Open", "Due Date": String(form.get("due") || "") };
+    // No client-side ID here — the server is the sole authority for work item IDs (see lib/hq-data.ts nextWorkId).
+    const row: SheetRow = { "Project / Function": String(form.get("function") || ""), "Work Item / Next Action": String(form.get("action") || ""), Owner: String(form.get("owner") || "Ahmad"), Status: "Open", "Due Date": String(form.get("due") || "") };
     const res = await fetch("/api/hq", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(row) });
-    if (!res.ok) { setError("The work item could not be saved."); return; }
-    setData(cur => ({ ...cur, work: [row, ...cur.work] }));
+    const payload = await res.json().catch(() => null);
+    if (!res.ok || !payload?.id) { setError("The work item could not be saved."); return; }
+    setData(cur => ({ ...cur, work: [{ ...row, ID: payload.id }, ...cur.work] }));
     event.currentTarget.reset();
     setView("work");
   }
@@ -654,14 +729,16 @@ export default function HomePage() {
         </nav>
         <div className="user-panel">
           <b>{session?.user?.name || "Loading..."}</b>
-          <small>{(session?.user as any)?.role || "Unknown Role"}</small>
+          <small>{session?.user?.role || "Unknown Role"}</small>
           <button className="link-button" onClick={runMaintenance} style={{ marginTop: 8, padding: 0 }}>Run Maintenance</button>
+          <button className="link-button" onClick={() => setShowGuide(true)} style={{ marginTop: 8, padding: 0, marginLeft: 12 }}>? Guide</button>
           <button className="link-button" onClick={() => signOut()} style={{ marginTop: 8, padding: 0, marginLeft: 12 }}>Sign Out</button>
         </div>
       </aside>
       <main className="main-content">
         {renderView()}
       </main>
+      {showGuide && <GuideTour onClose={dismissGuide} />}
     </main>
   );
 }

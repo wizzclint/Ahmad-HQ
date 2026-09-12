@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { google } from "googleapis";
 
 const TOKENS_PATH = path.join(process.cwd(), "tokens.json");
 
@@ -10,7 +11,6 @@ export interface OAuthTokens {
 }
 
 export function getOAuthClient() {
-  const { google } = require("googleapis");
   return new google.auth.OAuth2(
     process.env.GOOGLE_CLIENT_ID,
     process.env.GOOGLE_CLIENT_SECRET,

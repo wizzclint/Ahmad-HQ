@@ -25,7 +25,7 @@ export async function GET(request: Request) {
             .filter(i => i["Checklist ID"] === run["Checklist ID"])
             .sort((a, b) => Number(a.Sort || 0) - Number(b.Sort || 0));
 
-        const stateMap: Record<string, any> = {};
+        const stateMap: Record<string, { status: string; note: string; evidence: string }> = {};
         const relevantNotes = notes.filter(
             n => n["Source Type"] === "Checklist Item" && String(n["Source ID"] || "").startsWith(`${runId}|`)
         );

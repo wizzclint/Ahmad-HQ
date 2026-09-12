@@ -59,10 +59,29 @@ export async function readSheet(sheetName: string, headerRow: number, width: str
   return rowsFromValues((response.data.values ?? []) as string[][]);
 }
 
+/**
+ * The server is the sole authority for work item IDs — never trust a
+ * client-supplied ID. Reads the current sheet, finds the highest existing
+ * W-### number, and returns the next one. (A client-generated ID here
+ * previously let the browser's temporary "LOCAL-<timestamp>" placeholder
+ * get saved permanently, and let two near-simultaneous submits collide on
+ * the same fallback ID.)
+ */
+async function nextWorkId(): Promise<string> {
+  const sheetName = process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE";
+  const rows = await readSheet(sheetName, 5, "U").catch(() => []);
+  const highest = rows.reduce((max, row) => {
+    const match = /^W-(\d+)$/.exec(row.ID || "");
+    return match ? Math.max(max, parseInt(match[1], 10)) : max;
+  }, 0);
+  return `W-${String(highest + 1).padStart(3, "0")}`;
+}
+
 export async function addWork(item: SheetRow) {
-  if (await isDemoData()) return { ok: true, source: "demo" as const, id: item.ID };
-  await (await getSheets()).spreadsheets.values.append({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE"}!A:U`, valueInputOption: "USER_ENTERED", requestBody: { values: [[item.ID, item["Project / Function"], item["Work Item / Next Action"], item.Owner, "Action", "PUSH", "No", "Yes", item["Due Date"], "Open", "", "No", "", "", new Date().toISOString(), new Date().toISOString(), "No", "", "", "", "0d"]] } });
-  return { ok: true, source: "sheets" as const, id: item.ID };
+  if (await isDemoData()) return { ok: true, source: "demo" as const, id: `W-${Date.now()}` };
+  const id = await nextWorkId();
+  await (await getSheets()).spreadsheets.values.append({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE"}!A:U`, valueInputOption: "USER_ENTERED", requestBody: { values: [[id, item["Project / Function"], item["Work Item / Next Action"], item.Owner, "Action", "PUSH", "No", "Yes", item["Due Date"], "Open", "", "No", "", "", new Date().toISOString(), new Date().toISOString(), "No", "", "", "", "0d"]] } });
+  return { ok: true, source: "sheets" as const, id };
 }
 
 async function updateRow(sheetName: string, headerRow: number, width: string, id: string, changes: Record<string, string>) {

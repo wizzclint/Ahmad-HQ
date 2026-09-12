@@ -6,6 +6,7 @@ import {
   saveControl,
   saveWork,
 } from "@/lib/hq-data";
+import type { HqUser } from "@/lib/hq-types";
 
 export const dynamic = "force-dynamic";
 
@@ -38,9 +39,22 @@ import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 export async function GET() {
   try {
     const session = await getServerSession(authOptions);
-    const user = session?.user;
+    const sessionUser = session?.user;
+    // The session only carries what NextAuth's callbacks put on it (see
+    // app/api/auth/[...nextauth]/route.ts) — `authorized` isn't one of those
+    // fields, but reaching this point at all already implies it was true.
+    const user: HqUser | null = sessionUser
+      ? {
+          email: sessionUser.email ?? "",
+          name: sessionUser.name ?? "",
+          role: sessionUser.role ?? "",
+          area: sessionUser.area ?? "",
+          canSeeAll: Boolean(sessionUser.canSeeAll),
+          authorized: true,
+        }
+      : null;
 
-    return Response.json(await getBootstrap((user as unknown as any) || null));
+    return Response.json(await getBootstrap(user));
   } catch (error) {
     console.error("Unable to read Ahmad HQ data", error);
     return Response.json({ error: "Unable to read the connected Google Sheet." }, { status: 502 });
@@ -69,7 +83,7 @@ export async function POST(request: Request) {
     if (!item["Project / Function"] || !item["Work Item / Next Action"]) {
       return Response.json({ error: "A function and next action are required." }, { status: 400 });
     }
-    return Response.json(await addWork({ ...item, ID: item.ID ?? `W-${Date.now()}` }));
+    return Response.json(await addWork(item));
   } catch (error) {
     console.error("Unable to save Ahmad HQ row", error);
     return Response.json({ error: "Unable to save to the connected Google Sheet." }, { status: 502 });
