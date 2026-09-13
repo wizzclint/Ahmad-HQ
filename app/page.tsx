@@ -10,7 +10,7 @@ type View =
   | "customers" | "decisions" | "add"
   | "store" | "edible" | "gardenia" | "finance" | "legacy"
   | "property" | "people" | "podcast" | "personal" | "iron"
-  | "techBacklog";
+  | "techBacklog" | "custom" | "newSheet";
 
 const emptyData: HqBootstrap = {
   work: [], controls: [], user: "", generatedAt: "", source: "demo",
@@ -19,7 +19,7 @@ const emptyData: HqBootstrap = {
   gardeniaPipeline: [], gardeniaProduct: [], checklistDefs: [], checklistRuns: [],
   legacy: [], alerts: [], property: [], financeReg: [], podcast: [], personalReg: [],
   requests: [], training: [], systemAccess: [], periods: [], notes: [], activity: [],
-  techBacklog: [],
+  techBacklog: [], customSheetDefs: [], customSheets: {},
 };
 
 const closed = (v = "") => /done|complete|closed/i.test(v);
@@ -28,13 +28,16 @@ const isException = (row: SheetRow) =>
 
 // ── Generic editable data table ───────────────────────────────────────────────
 function EditableDataTable({
-  rows, sheetName, priorityCols, onUpdate, onAdd,
+  rows, sheetName, priorityCols, columns, onUpdate, onAdd, onDelete,
 }: {
   rows: SheetRow[];
   sheetName: string;
   priorityCols?: string[];
+  /** Explicit header list — needed for a brand-new sheet with zero rows yet, since headers can't be inferred from data. */
+  columns?: string[];
   onUpdate: (sheet: string, id: string, changes: Record<string, string>) => Promise<void>;
   onAdd: (sheet: string, row: Record<string, string>) => Promise<void>;
+  onDelete: (sheet: string, id: string) => Promise<void>;
 }) {
   const [editingIdx, setEditingIdx] = useState<number | null>(null);
   const [editValues, setEditValues] = useState<Record<string, string>>({});
@@ -42,7 +45,7 @@ function EditableDataTable({
   const [newRow, setNewRow] = useState<Record<string, string>>({});
   const [saving, setSaving] = useState(false);
 
-  const allHeaders = rows.length ? Object.keys(rows[0]) : [];
+  const allHeaders = columns && columns.length ? columns : (rows.length ? Object.keys(rows[0]) : []);
   const headers = priorityCols
     ? [...priorityCols.filter(h => allHeaders.includes(h)), ...allHeaders.filter(h => !priorityCols.includes(h))]
     : allHeaders;
@@ -71,6 +74,13 @@ function EditableDataTable({
       setAdding(false);
       setNewRow({});
     } finally { setSaving(false); }
+  };
+
+  const handleDelete = async (idx: number) => {
+    const id = rows[idx][headers[0]];
+    if (!confirm(`Delete this record${id ? ` (${id})` : ""}? This cannot be undone.`)) return;
+    setSaving(true);
+    try { await onDelete(sheetName, id); } finally { setSaving(false); }
   };
 
   return (
@@ -111,8 +121,9 @@ function EditableDataTable({
                     {showCols.map(h => (
                       <td key={h} style={{ padding: "6px 10px", maxWidth: 200, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={row[h]}>{row[h] || "—"}</td>
                     ))}
-                    <td style={{ padding: "6px 10px" }}>
+                    <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
                       <button className="link-button" style={{ fontSize: "0.75rem" }} onClick={() => startEdit(i)}>Edit</button>
+                      <button className="link-button" style={{ fontSize: "0.75rem", marginLeft: 8, color: "#ae493e" }} onClick={() => handleDelete(i)} disabled={saving}>Delete</button>
                     </td>
                   </>
                 )}
@@ -150,6 +161,44 @@ function EditableDataTable({
   );
 }
 
+// ── Create a new register sheet from the app ──────────────────────────────
+function NewSheetForm({ onCreate }: { onCreate: (label: string, columns: string[]) => Promise<string | null> }) {
+  const [label, setLabel] = useState("");
+  const [columnsText, setColumnsText] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState("");
+
+  const handleSubmit = async (e: FormEvent) => {
+    e.preventDefault();
+    const columns = columnsText.split(",").map(c => c.trim()).filter(Boolean);
+    if (!label.trim()) { setError("Give the sheet a name."); return; }
+    if (!columns.length) { setError("List at least one column."); return; }
+    setSaving(true);
+    setError("");
+    try {
+      const name = await onCreate(label.trim(), columns);
+      if (name) { setLabel(""); setColumnsText(""); }
+      else setError("Could not create the sheet — it may already exist, or the name didn't produce a valid sheet name.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <form className="form-grid" onSubmit={handleSubmit}>
+      <label className="full">Register name<input value={label} onChange={e => setLabel(e.target.value)} placeholder="e.g. Marketing Campaigns" required /></label>
+      <label className="full">
+        Columns (comma-separated)
+        <input value={columnsText} onChange={e => setColumnsText(e.target.value)} placeholder="e.g. Campaign, Channel, Budget, Status, Owner, Due" required />
+      </label>
+      {error && <p className="sub full" style={{ color: "#ae493e", margin: 0 }}>{error}</p>}
+      <button className="btn primary full" type="submit" disabled={saving} style={{ justifySelf: "start" }}>
+        {saving ? "Creating…" : "＋ Create register"}
+      </button>
+    </form>
+  );
+}
+
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="card" style={{ marginBottom: 16 }}>
@@ -165,9 +214,12 @@ function Badge({ value }: { value?: string }) {
   return <span className={`badge ${tone}`}>{text}</span>;
 }
 
-function WorkRow({ row, onSave }: { row: SheetRow; onSave: (u: SheetRow) => Promise<void> }) {
+function WorkRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: SheetRow) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
   const [editing, setEditing] = useState(false);
   const [update, setUpdate] = useState<SheetRow>({ id: row.ID, type: "work", status: row.Status, waitingOn: row["Waiting On"], blocked: row["Blocked?"], result: row["Result / Completion Note"], evidence: row["Evidence / Drive Link"], why: row["WHY / OUTCOME SUPPORTED"] });
+  const handleDelete = () => {
+    if (confirm(`Delete "${row["Work Item / Next Action"] || row.ID}"? This cannot be undone.`)) onDelete(row.ID);
+  };
   return (
     <article className="task-row">
       {editing ? (
@@ -193,6 +245,7 @@ function WorkRow({ row, onSave }: { row: SheetRow; onSave: (u: SheetRow) => Prom
           <div className="task-actions">
             <Badge value={row.Status} />
             <button className="link-button" onClick={() => setEditing(true)}>Edit</button>
+            <button className="link-button" style={{ color: "#ae493e" }} onClick={handleDelete}>Delete</button>
           </div>
         </>
       )}
@@ -200,9 +253,12 @@ function WorkRow({ row, onSave }: { row: SheetRow; onSave: (u: SheetRow) => Prom
   );
 }
 
-function ControlRow({ row, onSave }: { row: SheetRow; onSave: (u: SheetRow) => Promise<void> }) {
+function ControlRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: SheetRow) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
   const [editing, setEditing] = useState(false);
   const [update, setUpdate] = useState<SheetRow>({ id: row.ID, type: "control", status: row.Status, evidence: row["Evidence / Link"], exception: row["Exception?"], notes: row["Notes / Next Action"] });
+  const handleDelete = () => {
+    if (confirm(`Delete "${row.Control || row.ID}"? This cannot be undone.`)) onDelete(row.ID);
+  };
   return (
     <article className="control-card">
       {editing ? (
@@ -218,7 +274,13 @@ function ControlRow({ row, onSave }: { row: SheetRow; onSave: (u: SheetRow) => P
         </div>
       ) : (
         <>
-          <div className="control-head"><Badge value={row.Status} /><button className="link-button" onClick={() => setEditing(true)}>Edit</button></div>
+          <div className="control-head">
+            <Badge value={row.Status} />
+            <div>
+              <button className="link-button" onClick={() => setEditing(true)}>Edit</button>
+              <button className="link-button" style={{ color: "#ae493e", marginLeft: 10 }} onClick={handleDelete}>Delete</button>
+            </div>
+          </div>
           <h3>{row.Control}</h3>
           <small>{row["Project / Function"]} · {row.Owner} · {row.Cadence}</small>
           <p>{row["Notes / Next Action"] || "No next action recorded."}</p>
@@ -307,7 +369,7 @@ const areas: { id: View; label: string; icon: string; match: string[] }[] = [
   { id: "iron", label: "IRON MARKS", icon: "◇", match: ["iron"] },
 ];
 
-function Home({ data, onSave, navigate }: { data: HqBootstrap; onSave: (u: SheetRow) => Promise<void>; navigate: (v: View) => void }) {
+function Home({ data, onSave, onDelete, navigate }: { data: HqBootstrap; onSave: (u: SheetRow) => Promise<void>; onDelete: (id: string) => Promise<void>; navigate: (v: View) => void }) {
   const open = data.work.filter(r => !closed(r.Status));
   const blocked = open.filter(r => r["Blocked?"] === "Yes");
   const critical = open.filter(r => r["Critical Move?"] === "Yes");
@@ -327,12 +389,12 @@ function Home({ data, onSave, navigate }: { data: HqBootstrap; onSave: (u: Sheet
       <div className="dashboard-grid">
         <section className="card">
           <h2 className="section-title">Critical moves</h2>
-          {critical.slice(0, 5).map(r => <WorkRow row={r} onSave={onSave} key={r.ID} />)}
+          {critical.slice(0, 5).map(r => <WorkRow row={r} onSave={onSave} onDelete={onDelete} key={r.ID} />)}
           {!critical.length && <p className="sub">No critical moves currently recorded.</p>}
         </section>
         <section className="card">
           <h2 className="section-title">Exceptions & attention</h2>
-          {[...blocked, ...escalated.filter(r => !blocked.includes(r))].slice(0, 5).map(r => <WorkRow row={r} onSave={onSave} key={r.ID} />)}
+          {[...blocked, ...escalated.filter(r => !blocked.includes(r))].slice(0, 5).map(r => <WorkRow row={r} onSave={onSave} onDelete={onDelete} key={r.ID} />)}
           {!blocked.length && !escalated.length && <p className="sub">No exceptions currently recorded.</p>}
         </section>
       </div>
@@ -368,6 +430,7 @@ export default function HomePage() {
   const [data, setData] = useState(emptyData);
   const [view, setView] = useState<View>("home");
   const [selectedFunction, setSelectedFunction] = useState(functions[0]);
+  const [selectedCustomSheet, setSelectedCustomSheet] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showGuide, setShowGuide] = useState(false);
@@ -441,6 +504,16 @@ export default function HomePage() {
     }));
   }
 
+  // Sheets created via "+ New Register" aren't a fixed HqBootstrap field (sheetToKey
+  // won't have an entry for them) — their rows live in data.customSheets[sheet] instead.
+  function updateSheetRows(sheet: string, updater: (rows: SheetRow[]) => SheetRow[]) {
+    setData(cur => {
+      const dataKey = sheetToKey[sheet];
+      if (dataKey) return { ...cur, [dataKey]: updater(cur[dataKey as keyof HqBootstrap] as SheetRow[]) };
+      return { ...cur, customSheets: { ...cur.customSheets, [sheet]: updater(cur.customSheets[sheet] || []) } };
+    });
+  }
+
   // Generic update for any HQ_* sheet
   async function updateAnyRow(sheet: string, id: string, changes: Record<string, string>) {
     const res = await fetch("/api/hq", {
@@ -449,16 +522,7 @@ export default function HomePage() {
       body: JSON.stringify({ type: "generic", sheet, id, changes }),
     });
     if (!res.ok) throw new Error("Save failed");
-    // Optimistically update local state
-    const dataKey = sheetToKey[sheet];
-    if (dataKey) {
-      setData(cur => ({
-        ...cur,
-        [dataKey]: (cur[dataKey as keyof HqBootstrap] as SheetRow[]).map(r =>
-          r[Object.keys(r)[0]] === id ? { ...r, ...changes } : r
-        ),
-      }));
-    }
+    updateSheetRows(sheet, rows => rows.map(r => r[Object.keys(r)[0]] === id ? { ...r, ...changes } : r));
   }
 
   // Generic append for any HQ_* sheet
@@ -469,13 +533,47 @@ export default function HomePage() {
       body: JSON.stringify({ type: "generic", sheet, row }),
     });
     if (!res.ok) throw new Error("Add failed");
-    const dataKey = sheetToKey[sheet];
-    if (dataKey) {
-      setData(cur => ({
-        ...cur,
-        [dataKey]: [...(cur[dataKey as keyof HqBootstrap] as SheetRow[]), row],
-      }));
-    }
+    updateSheetRows(sheet, rows => [...rows, row]);
+  }
+
+  // Generic delete for any HQ_* sheet
+  async function deleteAnyRow(sheet: string, id: string) {
+    const res = await fetch("/api/hq", {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "generic", sheet, id }),
+    });
+    if (!res.ok) { setError("Delete failed."); return; }
+    updateSheetRows(sheet, rows => rows.filter(r => r[Object.keys(r)[0]] !== id));
+  }
+
+  async function deleteWorkItem(id: string) {
+    const res = await fetch("/api/hq", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "work", id }) });
+    if (!res.ok) { setError("Delete failed."); return; }
+    setData(cur => ({ ...cur, work: cur.work.filter(r => r.ID !== id) }));
+  }
+
+  async function deleteControlItem(id: string) {
+    const res = await fetch("/api/hq", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "control", id }) });
+    if (!res.ok) { setError("Delete failed."); return; }
+    setData(cur => ({ ...cur, controls: cur.controls.filter(r => r.ID !== id) }));
+  }
+
+  // Create a brand-new register sheet — no code change needed for it to show up.
+  async function createSheet(label: string, columns: string[]) {
+    const res = await fetch("/api/hq", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "createSheet", label, columns }),
+    });
+    const payload = await res.json().catch(() => null);
+    if (!res.ok || !payload?.ok) { setError(payload?.error || "Could not create the new sheet."); return null; }
+    setData(cur => ({
+      ...cur,
+      customSheetDefs: [...cur.customSheetDefs, { name: payload.name, label: payload.label, columns: payload.columns }],
+      customSheets: { ...cur.customSheets, [payload.name]: [] },
+    }));
+    return payload.name as string;
   }
 
   async function addWork(event: FormEvent<HTMLFormElement>) {
@@ -501,10 +599,8 @@ export default function HomePage() {
   ];
 
   // Helpers for editable tables
-  const edt = (sheet: string, rows: SheetRow[], priorityCols?: string[]) => (
-    rows.length === 0
-      ? <EditableDataTable rows={[]} sheetName={sheet} priorityCols={priorityCols} onUpdate={updateAnyRow} onAdd={addAnyRow} />
-      : <EditableDataTable rows={rows} sheetName={sheet} priorityCols={priorityCols} onUpdate={updateAnyRow} onAdd={addAnyRow} />
+  const edt = (sheet: string, rows: SheetRow[], priorityCols?: string[], columns?: string[]) => (
+    <EditableDataTable rows={rows} sheetName={sheet} priorityCols={priorityCols} columns={columns} onUpdate={updateAnyRow} onAdd={addAnyRow} onDelete={deleteAnyRow} />
   );
 
   if (status === "loading") {
@@ -530,7 +626,7 @@ export default function HomePage() {
     if (error) return <div className="card error-state">{error}</div>;
 
     switch (view) {
-      case "home": return <Home data={data} onSave={saveRow} navigate={nav} />;
+      case "home": return <Home data={data} onSave={saveRow} onDelete={deleteWorkItem} navigate={nav} />;
 
       case "work": return (
         <>
@@ -540,7 +636,7 @@ export default function HomePage() {
               <span className="sub">{data.work.filter(r => !closed(r.Status)).length} active work items</span>
               <button className="btn primary" onClick={() => nav("add")}>＋ Capture work</button>
             </div>
-            {data.work.map(r => <WorkRow row={r} onSave={saveRow} key={r.ID} />)}
+            {data.work.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />)}
           </section>
         </>
       );
@@ -551,7 +647,7 @@ export default function HomePage() {
           <div className="chips area-switcher">
             {functions.map(name => <button className={`chip ${selectedFunction === name ? "selected" : ""}`} onClick={() => setSelectedFunction(name)} key={name}>{name}</button>)}
           </div>
-          <section className="card">{visibleWork.map(r => <WorkRow row={r} onSave={saveRow} key={r.ID} />)}</section>
+          <section className="card">{visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />)}</section>
         </>
       );
 
@@ -568,7 +664,7 @@ export default function HomePage() {
         <>
           <Header title="Close / Review" subtitle="Complete the control once. Escalate the exception." data={data} />
           <Section title="Weekly Controls">
-            <section className="control-grid">{data.controls.map(r => <ControlRow row={r} onSave={saveRow} key={r.ID} />)}</section>
+            <section className="control-grid">{data.controls.map(r => <ControlRow row={r} onSave={saveRow} onDelete={deleteControlItem} key={r.ID} />)}</section>
           </Section>
           <Section title="Checklist Runs">{edt("HQ_CHECKLIST_RUNS", data.checklistRuns, ["Run ID", "Checklist Name", "Business", "Period Key", "Status", "Completion %", "On Time?", "Owner"])}</Section>
           <Section title="Checklist Definitions">{edt("HQ_CHECKLIST_DEFS", data.checklistDefs, ["Checklist ID", "Business", "Area", "Checklist Name", "Cadence", "Active?"])}</Section>
@@ -605,7 +701,7 @@ export default function HomePage() {
       case "gardenia": return (
         <>
           <Header title="Gardenia's Fire" subtitle="Pipeline, product and open work" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
           <Section title="Sales Pipeline">{edt("HQ_GARDENIA_PIPELINE", data.gardeniaPipeline, ["Account / Prospect", "Stage", "Contact / Company", "Revenue / Value", "Risk", "Next Follow-up", "Owner"])}</Section>
           <Section title="Product & Pricing">{edt("HQ_GARDENIA_PRODUCT", data.gardeniaProduct, ["Product / Test", "Test Status", "Unit Cost", "Price", "Target Margin", "Actual Margin", "Owner"])}</Section>
         </>
@@ -614,7 +710,7 @@ export default function HomePage() {
       case "finance": return (
         <>
           <Header title="Finance & Office" subtitle="Finance register, budgets and open work" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
           <Section title="Finance Register">{edt("HQ_FINANCE_REGISTER", data.financeReg, ["Register Type", "Entity / Property", "Account / Policy / Vendor / Tax", "Status", "Amount / Balance", "Due / Next Date", "Owner"])}</Section>
           <Section title="Budgets">{edt("HQ_BUDGETS", data.budgets, ["Year", "Month", "Business", "Revenue Budget", "Net Profit Budget", "Owner"])}</Section>
         </>
@@ -623,7 +719,7 @@ export default function HomePage() {
       case "legacy": return (
         <>
           <Header title="Legacy Closeout" subtitle="Open obligations and closeout status" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
           <Section title="Legacy Closeout Register">{edt("HQ_LEGACY_CLOSEOUT", data.legacy, ["Item ID", "Old Company / Entity", "Creditor / Issue", "Amount / Exposure", "Stage", "Risk", "Owner", "Status"])}</Section>
         </>
       );
@@ -631,7 +727,7 @@ export default function HomePage() {
       case "property": return (
         <>
           <Header title="Buyahka / Property" subtitle="Property items, renewals and next actions" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
           <Section title="Property Register">{edt("HQ_PROPERTY", data.property, ["Property", "Category", "Item", "Status", "Amount", "Due / Renewal", "Owner", "Next Action"])}</Section>
         </>
       );
@@ -639,7 +735,7 @@ export default function HomePage() {
       case "people": return (
         <>
           <Header title="People & Systems" subtitle="Team, training and system access" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
           <Section title="People">{edt("HQ_PEOPLE", data.people, ["Name", "Role", "Function / Area", "Availability", "Coverage Status", "Training Status", "Active?"])}</Section>
           <Section title="Training">{edt("HQ_TRAINING", data.training, ["Business / Area", "Role / Person", "Capability / Training", "Required?", "Status", "Due", "Owner"])}</Section>
           <Section title="System Access">{edt("HQ_SYSTEM_ACCESS", data.systemAccess, ["System / Account", "User / Role", "Access Level", "Status", "Owner / Admin", "Last Verified"])}</Section>
@@ -649,7 +745,7 @@ export default function HomePage() {
       case "podcast": return (
         <>
           <Header title="Podcast & Legacy" subtitle="Production pipeline and assets" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
           <Section title="Podcast Pipeline">{edt("HQ_PODCAST", data.podcast, ["Item ID", "Episode / Asset", "Stage", "Item Type", "Owner", "Due", "Status", "Next Action"])}</Section>
         </>
       );
@@ -657,7 +753,7 @@ export default function HomePage() {
       case "personal": return (
         <>
           <Header title="Personal / Ahmad" subtitle="Personal register and open work" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
           <Section title="Personal Register">{edt("HQ_PERSONAL_REGISTER", data.personalReg, ["Register Type", "Item / Account / Policy", "Status", "Amount", "Expected / Renewal / Due", "Owner", "Exception?"])}</Section>
         </>
       );
@@ -666,7 +762,7 @@ export default function HomePage() {
       case "edible": return (
         <>
           <Header title={view === "store" ? "Edible - Store" : "Edible - Management"} subtitle="Operations, checklists and open work" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
           <Section title="Checklist Runs">{edt("HQ_CHECKLIST_RUNS", data.checklistRuns.filter(r => /edible/i.test(r.Business || "")), ["Checklist Name", "Period Key", "Status", "Completion %", "On Time?", "Owner"])}</Section>
         </>
       );
@@ -674,7 +770,7 @@ export default function HomePage() {
       case "iron": return (
         <>
           <Header title="Iron Marks" subtitle="Current records" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} key={r.ID} />) : <p className="sub">No work items for Iron Marks yet.</p>}</Section>
+          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items for Iron Marks yet.</p>}</Section>
         </>
       );
 
@@ -697,6 +793,38 @@ export default function HomePage() {
           </form>
         </>
       );
+
+      case "newSheet": return (
+        <>
+          <Header title="New Register" subtitle="Create a new tracked sheet — it shows up in the sidebar immediately, no code changes needed." data={data} />
+          <section className="card">
+            <NewSheetForm onCreate={async (label, columns) => {
+              const name = await createSheet(label, columns);
+              if (name) { setSelectedCustomSheet(name); setView("custom"); }
+              return name;
+            }} />
+          </section>
+        </>
+      );
+
+      case "custom": {
+        const def = data.customSheetDefs.find(d => d.name === selectedCustomSheet);
+        return (
+          <>
+            <Header title={def?.label || "Register"} subtitle="Custom register" data={data} />
+            {data.customSheetDefs.length > 1 && (
+              <div className="chips area-switcher">
+                {data.customSheetDefs.map(d => (
+                  <button className={`chip ${selectedCustomSheet === d.name ? "selected" : ""}`} onClick={() => setSelectedCustomSheet(d.name)} key={d.name}>{d.label}</button>
+                ))}
+              </div>
+            )}
+            <Section title={def?.label || "Records"}>
+              {def ? edt(def.name, data.customSheets[def.name] || [], undefined, def.columns) : <p className="sub">Register not found.</p>}
+            </Section>
+          </>
+        );
+      }
 
       default: return <p className="sub">View not found.</p>;
     }
@@ -736,7 +864,24 @@ export default function HomePage() {
           <button onClick={() => nav("add")}><span>＋</span>Capture / Inbox</button>
           <button onClick={() => nav("customers")}><span>⌕</span>Customers</button>
           <button onClick={() => nav("decisions")}><span>◆</span>Decisions</button>
+          <button onClick={() => nav("newSheet")}><span>▦</span>New Register</button>
         </nav>
+        {data.customSheetDefs.length > 0 && (
+          <>
+            <div className="nav-label">YOUR REGISTERS</div>
+            <nav>
+              {data.customSheetDefs.map(d => (
+                <button
+                  className={view === "custom" && selectedCustomSheet === d.name ? "active" : ""}
+                  key={d.name}
+                  onClick={() => { setSelectedCustomSheet(d.name); nav("custom"); }}
+                >
+                  <span>▤</span>{d.label}
+                </button>
+              ))}
+            </nav>
+          </>
+        )}
         <div className="user-panel">
           <b>{session?.user?.name || "Loading..."}</b>
           <small>{session?.user?.role || "Unknown Role"}</small>

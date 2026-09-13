@@ -1,7 +1,12 @@
 import {
   addWork,
   appendAnyRow,
+  createCustomSheet,
+  deleteAnyRow,
+  deleteControl,
+  deleteWork,
   getBootstrap,
+  isRegisteredCustomSheet,
   saveAnyRow,
   saveControl,
   saveWork,
@@ -31,6 +36,15 @@ function validateWriteRequest(request: Request, body: unknown) {
   }
   if (JSON.stringify(body).length > maxBodySize) return "Request body is too large.";
   return null;
+}
+
+// A sheet is writable either because it's one of the built-in registers above,
+// or because it was created at runtime via "+ New Register" and is recorded
+// in the HQ_CUSTOM_SHEETS registry (see lib/hq-data.ts).
+async function isAllowedSheet(name: unknown): Promise<boolean> {
+  if (typeof name !== "string" || !name) return false;
+  if (ALLOWED_SHEETS.has(name)) return true;
+  return isRegisteredCustomSheet(name);
 }
 
 import { getServerSession } from "next-auth/next";
@@ -68,9 +82,23 @@ export async function POST(request: Request) {
     const validationError = validateWriteRequest(request, item);
     if (validationError) return Response.json({ error: validationError }, { status: 415 });
 
+    // Create a brand-new register sheet at runtime — no code change needed.
+    if (item.type === "createSheet") {
+      if (!item.label || typeof item.label !== "string") {
+        return Response.json({ error: "A name is required." }, { status: 400 });
+      }
+      if (!Array.isArray(item.columns) || item.columns.some((c: unknown) => typeof c !== "string")) {
+        return Response.json({ error: "A list of column names is required." }, { status: 400 });
+      }
+      const session = await getServerSession(authOptions);
+      const createdBy = session?.user?.email || "unknown";
+      const result = await createCustomSheet(item.label, item.columns, createdBy);
+      return Response.json(result, { status: result.ok ? 200 : 400 });
+    }
+
     // Generic append to any allowed sheet
     if (item.type === "generic") {
-      if (!item.sheet || !ALLOWED_SHEETS.has(item.sheet)) {
+      if (!(await isAllowedSheet(item.sheet))) {
         return Response.json({ error: "Unknown or disallowed sheet." }, { status: 400 });
       }
       if (!item.row || typeof item.row !== "object") {
@@ -98,7 +126,7 @@ export async function PUT(request: Request) {
 
     // Generic update for any allowed sheet
     if (update.type === "generic") {
-      if (!update.sheet || !ALLOWED_SHEETS.has(update.sheet)) {
+      if (!(await isAllowedSheet(update.sheet))) {
         return Response.json({ error: "Unknown or disallowed sheet." }, { status: 400 });
       }
       if (!update.id || !update.changes || typeof update.changes !== "object") {
@@ -119,5 +147,32 @@ export async function PUT(request: Request) {
   } catch (error) {
     console.error("Unable to update Ahmad HQ row", error);
     return Response.json({ error: "Unable to update the connected Google Sheet." }, { status: 502 });
+  }
+}
+
+export async function DELETE(request: Request) {
+  try {
+    const body = await request.json();
+    const validationError = validateWriteRequest(request, body);
+    if (validationError) return Response.json({ error: validationError }, { status: 415 });
+
+    if (!body.id || typeof body.id !== "string") {
+      return Response.json({ error: "An id is required." }, { status: 400 });
+    }
+
+    if (body.type === "generic") {
+      if (!(await isAllowedSheet(body.sheet))) {
+        return Response.json({ error: "Unknown or disallowed sheet." }, { status: 400 });
+      }
+      return Response.json(await deleteAnyRow(body.sheet, body.id));
+    }
+
+    if (body.type === "control") return Response.json(await deleteControl(body.id));
+    if (body.type === "work") return Response.json(await deleteWork(body.id));
+
+    return Response.json({ error: "Unsupported delete type." }, { status: 400 });
+  } catch (error) {
+    console.error("Unable to delete Ahmad HQ row", error);
+    return Response.json({ error: "Unable to delete from the connected Google Sheet." }, { status: 502 });
   }
 }

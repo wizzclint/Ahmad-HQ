@@ -97,6 +97,43 @@ async function updateRow(sheetName: string, headerRow: number, width: string, id
   return { ok: true, source: "sheets" as const, id };
 }
 
+/** Find the numeric sheetId (gid) Google's batchUpdate API needs for a tab, by its name. */
+async function getSheetGid(sheets: Awaited<ReturnType<typeof getSheets>>, sheetName: string): Promise<number> {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID });
+  const sheet = meta.data.sheets?.find((s) => s.properties?.title === sheetName);
+  if (sheet?.properties?.sheetId == null) throw new Error(`Sheet not found: ${sheetName}`);
+  return sheet.properties.sheetId;
+}
+
+/** Delete the row whose first column matches `id`. `headerRow` is where the header row lives (1-indexed). */
+async function deleteRow(sheetName: string, headerRow: number, id: string) {
+  if (await isDemoData()) return { ok: true, source: "demo" as const, id };
+  const sheets = await getSheets();
+  const values = (await sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${sheetName}!A${headerRow}:Z` })).data.values as string[][] | undefined;
+  const rowIndex = values?.findIndex((row, index) => index > 0 && row[0] === id) ?? -1;
+  if (rowIndex < 0) throw new Error(`Row not found: ${id}`);
+  const gid = await getSheetGid(sheets, sheetName);
+  const absoluteRow0Indexed = headerRow - 1 + rowIndex;
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    requestBody: { requests: [{ deleteDimension: { range: { sheetId: gid, dimension: "ROWS", startIndex: absoluteRow0Indexed, endIndex: absoluteRow0Indexed + 1 } } }] },
+  });
+  return { ok: true, source: "sheets" as const, id };
+}
+
+export function deleteWork(id: string) {
+  return deleteRow(process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE", 5, id);
+}
+
+export function deleteControl(id: string) {
+  return deleteRow(process.env.GOOGLE_CLOSE_SHEET ?? "WEEK CLOSE — UPDATE", 1, id);
+}
+
+/** Delete a row from any HQ_* sheet. `id` must match the value in the first column. */
+export function deleteAnyRow(sheetName: string, id: string) {
+  return deleteRow(sheetName, 1, id);
+}
+
 export function saveWork(update: SheetRow) {
   const fields: Record<string, string> = { status: "Status", waitingOn: "Waiting On", blocked: "Blocked?", result: "Result / Completion Note", evidence: "Evidence / Drive Link", plannedDay: "PLANNED DAY", why: "WHY / OUTCOME SUPPORTED" };
   const changes: Record<string, string> = {};
@@ -116,6 +153,101 @@ export function saveControl(update: SheetRow) {
 /** Update any cell(s) in any HQ_* sheet. `id` must match the value in the first column. */
 export function saveAnyRow(sheetName: string, id: string, changes: Record<string, string>) {
   return updateRow(sheetName, 1, "Z", id, changes);
+}
+
+// ── Dynamic custom sheets ───────────────────────────────────────────────
+// Lets the app create new register tabs at runtime instead of needing a code
+// change (a new field in HqBootstrap, a new whitelist entry, a new nav case)
+// every time someone wants to track a new kind of record. HQ_CUSTOM_SHEETS
+// is the single source of truth for which dynamic sheets exist.
+const CUSTOM_SHEETS_REGISTRY = "HQ_CUSTOM_SHEETS";
+const CUSTOM_SHEET_NAME_PATTERN = /^HQ_[A-Z0-9_]{2,40}$/;
+
+export type CustomSheetDef = { name: string; label: string; columns: string[] };
+
+async function ensureCustomSheetsRegistry(sheets: Awaited<ReturnType<typeof getSheets>>) {
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID });
+  if (meta.data.sheets?.some((s) => s.properties?.title === CUSTOM_SHEETS_REGISTRY)) return;
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    requestBody: { requests: [{ addSheet: { properties: { title: CUSTOM_SHEETS_REGISTRY } } }] },
+  });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: `${CUSTOM_SHEETS_REGISTRY}!A1`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [["Sheet Name", "Label", "Columns", "Created By", "Created At"]] },
+  });
+}
+
+export async function listCustomSheets(): Promise<CustomSheetDef[]> {
+  if (await isDemoData()) return [];
+  const rows = await readSheet(CUSTOM_SHEETS_REGISTRY, 1, "Z").catch(() => []);
+  return rows
+    .filter((r) => r["Sheet Name"])
+    .map((r) => ({
+      name: r["Sheet Name"],
+      label: r.Label || r["Sheet Name"],
+      columns: (r.Columns || "").split(",").map((c) => c.trim()).filter(Boolean),
+    }));
+}
+
+export async function isRegisteredCustomSheet(sheetName: string): Promise<boolean> {
+  const defs = await listCustomSheets();
+  return defs.some((d) => d.name === sheetName);
+}
+
+function slugifySheetName(label: string): string {
+  const slug = label.toUpperCase().replace(/[^A-Z0-9]+/g, "_").replace(/^_+|_+$/g, "").slice(0, 40);
+  return `HQ_${slug || "CUSTOM"}`;
+}
+
+/**
+ * Create a brand-new register tab from the app: pick a unique sheet name from
+ * the label, create the tab, write the header row, and record it in the
+ * registry so getBootstrap() and the write-whitelist both pick it up
+ * immediately with no code change needed.
+ */
+export async function createCustomSheet(label: string, columns: string[], createdBy: string) {
+  if (await isDemoData()) return { ok: false, error: "Not connected to Google Sheets yet." };
+  const cleanLabel = label.trim();
+  const cleanColumns = columns.map((c) => c.trim()).filter(Boolean);
+  if (!cleanLabel) return { ok: false, error: "A name is required." };
+  if (!cleanColumns.length) return { ok: false, error: "At least one column is required." };
+  if (cleanColumns.length > 20) return { ok: false, error: "20 columns maximum." };
+
+  const sheets = await getSheets();
+  await ensureCustomSheetsRegistry(sheets);
+
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID });
+  const existingTitles = new Set(meta.data.sheets?.map((s) => s.properties?.title).filter(Boolean));
+
+  let name = slugifySheetName(cleanLabel);
+  if (!CUSTOM_SHEET_NAME_PATTERN.test(name)) return { ok: false, error: "Could not derive a valid sheet name — try a name with letters or numbers in it." };
+  let suffix = 2;
+  while (existingTitles.has(name)) {
+    name = `${slugifySheetName(cleanLabel)}_${suffix}`;
+    suffix++;
+  }
+
+  await sheets.spreadsheets.batchUpdate({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    requestBody: { requests: [{ addSheet: { properties: { title: name } } }] },
+  });
+  await sheets.spreadsheets.values.update({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: `${name}!A1`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [cleanColumns] },
+  });
+  await sheets.spreadsheets.values.append({
+    spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+    range: `${CUSTOM_SHEETS_REGISTRY}!A:E`,
+    valueInputOption: "USER_ENTERED",
+    requestBody: { values: [[name, cleanLabel, cleanColumns.join(", "), createdBy, new Date().toISOString()]] },
+  });
+
+  return { ok: true, source: "sheets" as const, name, label: cleanLabel, columns: cleanColumns };
 }
 
 /** Append a new row to any HQ_* sheet, mapping object keys to sheet headers. */
@@ -276,7 +408,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
       legacy: EMPTY, alerts: EMPTY, property: EMPTY, financeReg: EMPTY,
       podcast: EMPTY, personalReg: EMPTY, requests: EMPTY, training: EMPTY,
       systemAccess: EMPTY, periods: EMPTY, notes: EMPTY, activity: EMPTY,
-      techBacklog: EMPTY,
+      techBacklog: EMPTY, customSheetDefs: [], customSheets: {},
     };
   }
 
@@ -288,7 +420,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
     gardeniaPipeline, gardeniaProduct, checklistDefs, checklistRuns,
     legacy, alerts, property, financeReg, podcast, personalReg,
     requests, training, systemAccess, periods, notes, activity,
-    techBacklog,
+    techBacklog, customSheetDefs,
   ] = await Promise.all([
     readSheet(process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE", 5, "U"),
     readSheet(process.env.GOOGLE_CLOSE_SHEET ?? "WEEK CLOSE — UPDATE", 1, "J"),
@@ -304,8 +436,15 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
     s("HQ_REQUESTS"), s("HQ_TRAINING"),
     s("HQ_SYSTEM_ACCESS"), s("HQ_PERIODS"),
     s("HQ_NOTES"), s("HQ_ACTIVITY"),
-    s("HQ_TECH_BACKLOG"),
+    s("HQ_TECH_BACKLOG"), listCustomSheets().catch(() => []),
   ]);
+
+  // Dynamically-created sheets aren't known at compile time, so their data
+  // lives in a lookup keyed by sheet name instead of a fixed HqBootstrap field.
+  const customSheets: Record<string, SheetRow[]> = {};
+  await Promise.all(customSheetDefs.map(async (def) => {
+    customSheets[def.name] = await readSheet(def.name, 1, "Z").catch(() => EMPTY);
+  }));
 
   const raw: HqBootstrap = {
     work, controls,
@@ -316,7 +455,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
     gardeniaPipeline, gardeniaProduct, checklistDefs, checklistRuns,
     legacy, alerts, property, financeReg, podcast, personalReg,
     requests, training, systemAccess, periods, notes, activity,
-    techBacklog,
+    techBacklog, customSheetDefs, customSheets,
   };
 
   return user ? filterBootstrapForUser(raw, user) : raw;
