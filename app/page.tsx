@@ -45,6 +45,33 @@ function statusBucket(status?: string): Bucket {
   return "todo";
 }
 
+// Covers both conventions already in use across sheets (Work: Open/Done,
+// Tech Backlog: Not Started/Completed) plus common extras — a dropdown here
+// instead of free text is what keeps status values matching statusBucket()
+// instead of drifting into one-off text like "Started".
+const STATUS_OPTIONS = ["Not Started", "Open", "In Progress", "Blocked", "Waiting", "On Hold", "Completed", "Done"];
+function StatusSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const options = value && !STATUS_OPTIONS.includes(value) ? [value, ...STATUS_OPTIONS] : STATUS_OPTIONS;
+  return (
+    <select value={value} onChange={e => onChange(e.target.value)} style={{ width: "100%", fontSize: "0.82rem", padding: "2px 4px", border: "1px solid #c0c8d8", borderRadius: 3 }}>
+      {!value && <option value="">—</option>}
+      {options.map(o => <option key={o} value={o}>{o}</option>)}
+    </select>
+  );
+}
+
+// Quick-glance counts of how many rows fall into each status bucket.
+function StatusSummary({ rows, statusField = "Status" }: { rows: SheetRow[]; statusField?: string }) {
+  const counts = BUCKETS.map(b => rows.filter(r => statusBucket(r[statusField]) === b.id).length);
+  return (
+    <section className="kpis-4">
+      {BUCKETS.map((b, i) => (
+        <Kpi key={b.id} label={b.label} value={counts[i]} detail={rows.length ? `${Math.round((counts[i] / rows.length) * 100)}% of ${rows.length}` : "—"} tone="" />
+      ))}
+    </section>
+  );
+}
+
 // ── Generic editable data table ───────────────────────────────────────────────
 function EditableDataTable({
   rows, sheetName, priorityCols, columns, onUpdate, onAdd, onDelete,
@@ -121,11 +148,15 @@ function EditableDataTable({
                   <>
                     {showCols.map(h => (
                       <td key={h} style={{ padding: "4px 6px" }}>
-                        <input
-                          value={editValues[h] ?? ""}
-                          onChange={e => setEditValues(v => ({ ...v, [h]: e.target.value }))}
-                          style={{ width: "100%", fontSize: "0.82rem", padding: "2px 4px", border: "1px solid #c0c8d8", borderRadius: 3 }}
-                        />
+                        {h === "Status" ? (
+                          <StatusSelect value={editValues[h] ?? ""} onChange={v => setEditValues(ev => ({ ...ev, [h]: v }))} />
+                        ) : (
+                          <input
+                            value={editValues[h] ?? ""}
+                            onChange={e => setEditValues(v => ({ ...v, [h]: e.target.value }))}
+                            style={{ width: "100%", fontSize: "0.82rem", padding: "2px 4px", border: "1px solid #c0c8d8", borderRadius: 3 }}
+                          />
+                        )}
                       </td>
                     ))}
                     <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
@@ -153,12 +184,16 @@ function EditableDataTable({
               <tr style={{ background: "#eef4ff", borderBottom: "1px solid #c0c8d8" }}>
                 {showCols.map(h => (
                   <td key={h} style={{ padding: "4px 6px" }}>
-                    <input
-                      placeholder={h}
-                      value={newRow[h] ?? ""}
-                      onChange={e => setNewRow(v => ({ ...v, [h]: e.target.value }))}
-                      style={{ width: "100%", fontSize: "0.82rem", padding: "2px 4px", border: "1px solid #c0c8d8", borderRadius: 3 }}
-                    />
+                    {h === "Status" ? (
+                      <StatusSelect value={newRow[h] ?? ""} onChange={v => setNewRow(nr => ({ ...nr, [h]: v }))} />
+                    ) : (
+                      <input
+                        placeholder={h}
+                        value={newRow[h] ?? ""}
+                        onChange={e => setNewRow(v => ({ ...v, [h]: e.target.value }))}
+                        style={{ width: "100%", fontSize: "0.82rem", padding: "2px 4px", border: "1px solid #c0c8d8", borderRadius: 3 }}
+                      />
+                    )}
                   </td>
                 ))}
                 <td style={{ padding: "4px 8px", whiteSpace: "nowrap" }}>
@@ -430,7 +465,11 @@ function GenericKanbanCard({
         {headers.map(h => (
           <label key={h} className="kanban-field">
             <span>{h}</span>
-            <input value={values[h] ?? ""} onChange={e => setValues(v => ({ ...v, [h]: e.target.value }))} />
+            {h === "Status" ? (
+              <StatusSelect value={values[h] ?? ""} onChange={v => setValues(vv => ({ ...vv, [h]: v }))} />
+            ) : (
+              <input value={values[h] ?? ""} onChange={e => setValues(v => ({ ...v, [h]: e.target.value }))} />
+            )}
           </label>
         ))}
         <div className="edit-actions">
@@ -797,6 +836,7 @@ export default function HomePage() {
       case "work": return (
         <>
           <Header title="My Work" subtitle="This week · today · waiting · blocked" data={data} />
+          <StatusSummary rows={data.work} />
           <section className="card">
             <div className="list-toolbar">
               <span className="sub">{data.work.filter(r => !closed(r.Status)).length} active work items</span>
@@ -958,6 +998,7 @@ export default function HomePage() {
       case "techBacklog": return (
         <>
           <Header title="Tech Backlog" subtitle="Technology, design and execution — scope, links, feedback and completion" data={data} />
+          <StatusSummary rows={data.techBacklog} />
           <section className="card">
             <div className="list-toolbar">
               <span className="sub">{data.techBacklog.length} tasks</span>
