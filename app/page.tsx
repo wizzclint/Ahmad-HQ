@@ -26,6 +26,25 @@ const closed = (v = "") => /done|complete|closed/i.test(v);
 const isException = (row: SheetRow) =>
   row["Management Escalation?"] === "Yes" || row["Blocked?"] === "Yes" || row["Exception?"] === "Yes";
 
+// ── Kanban status buckets ──────────────────────────────────────────────────
+// Normalizes whatever raw Status text a sheet happens to use ("Open",
+// "Not Started", "Blocked", "Waiting On Ahmad"...) into one of 4 pipeline
+// stages, so different registers can share the same board shape.
+type Bucket = "todo" | "pending" | "inProgress" | "completed";
+const BUCKETS: { id: Bucket; label: string }[] = [
+  { id: "todo", label: "To Do" },
+  { id: "pending", label: "Pending" },
+  { id: "inProgress", label: "In Progress" },
+  { id: "completed", label: "Completed" },
+];
+function statusBucket(status?: string): Bucket {
+  const s = (status || "").toLowerCase();
+  if (/done|complete/.test(s)) return "completed";
+  if (/progress/.test(s)) return "inProgress";
+  if (/block|wait|hold|pending/.test(s)) return "pending";
+  return "todo";
+}
+
 // ── Generic editable data table ───────────────────────────────────────────────
 function EditableDataTable({
   rows, sheetName, priorityCols, columns, onUpdate, onAdd, onDelete,
@@ -290,6 +309,151 @@ function ControlRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: Shee
   );
 }
 
+// ── Kanban board ────────────────────────────────────────────────────────────
+// Generic 4-column board — the caller supplies how to identify a row's id,
+// its status, and how to render its card (collapsed or in edit mode), so the
+// same board shape works for Work items and any generic register sheet.
+function KanbanBoard<T extends SheetRow>({
+  rows, statusField = "Status", bucketStatus, onMove, renderCard,
+}: {
+  rows: T[];
+  statusField?: string;
+  /** The Status value to write when a card is dropped into each column. */
+  bucketStatus: Record<Bucket, string>;
+  onMove: (row: T, newStatus: string) => void;
+  renderCard: (row: T) => React.ReactNode;
+}) {
+  const [dragId, setDragId] = useState<string | null>(null);
+  const idOf = (row: T) => row[Object.keys(row)[0]];
+
+  return (
+    <div className="kanban-board">
+      {BUCKETS.map(col => {
+        const items = rows.filter(r => statusBucket(r[statusField]) === col.id);
+        return (
+          <div
+            key={col.id}
+            className="kanban-column"
+            onDragOver={e => e.preventDefault()}
+            onDrop={() => {
+              if (!dragId) return;
+              const row = rows.find(r => idOf(r) === dragId);
+              if (row && statusBucket(row[statusField]) !== col.id) onMove(row, bucketStatus[col.id]);
+              setDragId(null);
+            }}
+          >
+            <div className="kanban-column-header">
+              <span>{col.label}</span>
+              <span className="kanban-count">{items.length}</span>
+            </div>
+            <div className="kanban-column-body">
+              {items.map(row => (
+                <div key={idOf(row)} draggable onDragStart={() => setDragId(idOf(row))} className="kanban-card-wrap">
+                  {renderCard(row)}
+                </div>
+              ))}
+              {!items.length && <p className="sub kanban-empty">Drop items here</p>}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function WorkKanbanCard({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: SheetRow) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
+  const [editing, setEditing] = useState(false);
+  const [update, setUpdate] = useState<SheetRow>({ id: row.ID, type: "work", status: row.Status, waitingOn: row["Waiting On"], result: row["Result / Completion Note"], evidence: row["Evidence / Drive Link"] });
+  const handleDelete = () => {
+    if (confirm(`Delete "${row["Work Item / Next Action"] || row.ID}"? This cannot be undone.`)) onDelete(row.ID);
+  };
+  if (editing) {
+    return (
+      <div className="kanban-card">
+        <div className="edit-fields kanban-edit-fields">
+          <select value={update.status} onChange={e => setUpdate({ ...update, status: e.target.value })}>
+            <option>Open</option><option>In Progress</option><option>Done</option><option>Completed</option><option>Blocked</option>
+          </select>
+          <input value={update.waitingOn || ""} onChange={e => setUpdate({ ...update, waitingOn: e.target.value })} placeholder="Waiting on" />
+          <input value={update.result || ""} onChange={e => setUpdate({ ...update, result: e.target.value })} placeholder="Result / completion note" />
+          <input value={update.evidence || ""} onChange={e => setUpdate({ ...update, evidence: e.target.value })} placeholder="Evidence / Drive link" />
+          <div className="edit-actions">
+            <button className="link-button" onClick={() => setEditing(false)}>Cancel</button>
+            <button className="btn primary" onClick={async () => { await onSave(update); setEditing(false); }}>Save</button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+  return (
+    <div className="kanban-card">
+      <b>{row["Work Item / Next Action"] || "Untitled work item"}</b>
+      <small>{row["Project / Function"] || "Unassigned"} · {row.Owner || "No owner"}</small>
+      {row["Critical Move?"] === "Yes" && <span className="badge bad">Critical</span>}
+      <div className="kanban-card-actions">
+        <button className="link-button" onClick={() => setEditing(true)}>Edit</button>
+        <button className="link-button" style={{ color: "#ae493e" }} onClick={handleDelete}>Delete</button>
+      </div>
+    </div>
+  );
+}
+
+function GenericKanbanCard({
+  row, sheetName, titleField, subtitleFields, onUpdate, onDelete,
+}: {
+  row: SheetRow;
+  sheetName: string;
+  titleField: string;
+  subtitleFields: string[];
+  onUpdate: (sheet: string, id: string, changes: Record<string, string>) => Promise<void>;
+  onDelete: (sheet: string, id: string) => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [values, setValues] = useState<Record<string, string>>(row);
+  const id = row[Object.keys(row)[0]];
+  const headers = Object.keys(row);
+
+  const handleSave = async () => {
+    const changes: Record<string, string> = {};
+    headers.forEach(h => { if (values[h] !== row[h]) changes[h] = values[h] ?? ""; });
+    if (Object.keys(changes).length) await onUpdate(sheetName, id, changes);
+    setEditing(false);
+  };
+
+  const handleDelete = () => {
+    if (confirm(`Delete "${row[titleField] || id}"? This cannot be undone.`)) onDelete(sheetName, id);
+  };
+
+  if (editing) {
+    return (
+      <div className="kanban-card kanban-card-editing">
+        {headers.map(h => (
+          <label key={h} className="kanban-field">
+            <span>{h}</span>
+            <input value={values[h] ?? ""} onChange={e => setValues(v => ({ ...v, [h]: e.target.value }))} />
+          </label>
+        ))}
+        <div className="edit-actions">
+          <button className="link-button" onClick={() => { setValues(row); setEditing(false); }}>Cancel</button>
+          <button className="btn primary" onClick={handleSave}>Save</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="kanban-card">
+      <b>{row[titleField] || id}</b>
+      <small>{subtitleFields.map(f => row[f]).filter(Boolean).join(" · ")}</small>
+      {row.Priority && <span className={`badge ${/p0/i.test(row.Priority) ? "bad" : ""}`}>{row.Priority}</span>}
+      <div className="kanban-card-actions">
+        <button className="link-button" onClick={() => setEditing(true)}>Edit</button>
+        <button className="link-button" style={{ color: "#ae493e" }} onClick={handleDelete}>Delete</button>
+      </div>
+    </div>
+  );
+}
+
 function Header({ title, subtitle, data }: { title: string; subtitle: string; data: HqBootstrap }) {
   return (
     <div className="page-top">
@@ -431,6 +595,8 @@ export default function HomePage() {
   const [view, setView] = useState<View>("home");
   const [selectedFunction, setSelectedFunction] = useState(functions[0]);
   const [selectedCustomSheet, setSelectedCustomSheet] = useState<string>("");
+  const [workBoardView, setWorkBoardView] = useState(true);
+  const [backlogBoardView, setBacklogBoardView] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showGuide, setShowGuide] = useState(false);
@@ -634,9 +800,24 @@ export default function HomePage() {
           <section className="card">
             <div className="list-toolbar">
               <span className="sub">{data.work.filter(r => !closed(r.Status)).length} active work items</span>
-              <button className="btn primary" onClick={() => nav("add")}>＋ Capture work</button>
+              <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                <div className="chips">
+                  <button className={`chip ${workBoardView ? "selected" : ""}`} onClick={() => setWorkBoardView(true)}>▤ Board</button>
+                  <button className={`chip ${!workBoardView ? "selected" : ""}`} onClick={() => setWorkBoardView(false)}>☰ List</button>
+                </div>
+                <button className="btn primary" onClick={() => nav("add")}>＋ Capture work</button>
+              </div>
             </div>
-            {data.work.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />)}
+            {workBoardView ? (
+              <KanbanBoard
+                rows={data.work}
+                bucketStatus={{ todo: "Open", pending: "Blocked", inProgress: "In Progress", completed: "Done" }}
+                onMove={(row, status) => saveRow({ id: row.ID, type: "work", status })}
+                renderCard={row => <WorkKanbanCard row={row} onSave={saveRow} onDelete={deleteWorkItem} />}
+              />
+            ) : (
+              data.work.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />)
+            )}
           </section>
         </>
       );
@@ -777,7 +958,34 @@ export default function HomePage() {
       case "techBacklog": return (
         <>
           <Header title="Tech Backlog" subtitle="Technology, design and execution — scope, links, feedback and completion" data={data} />
-          <Section title="Full Backlog">{edt("HQ_TECH_BACKLOG", data.techBacklog, ["ID", "Mini Project", "Clinton Task", "Priority", "Status", "Reviewer / Approver", "Timing", "Owner"])}</Section>
+          <section className="card">
+            <div className="list-toolbar">
+              <span className="sub">{data.techBacklog.length} tasks</span>
+              <div className="chips">
+                <button className={`chip ${backlogBoardView ? "selected" : ""}`} onClick={() => setBacklogBoardView(true)}>▤ Board</button>
+                <button className={`chip ${!backlogBoardView ? "selected" : ""}`} onClick={() => setBacklogBoardView(false)}>☰ List</button>
+              </div>
+            </div>
+            {backlogBoardView ? (
+              <KanbanBoard
+                rows={data.techBacklog}
+                bucketStatus={{ todo: "Not Started", pending: "Blocked", inProgress: "In Progress", completed: "Completed" }}
+                onMove={(row, status) => updateAnyRow("HQ_TECH_BACKLOG", row.ID, { Status: status })}
+                renderCard={row => (
+                  <GenericKanbanCard
+                    row={row}
+                    sheetName="HQ_TECH_BACKLOG"
+                    titleField="Clinton Task"
+                    subtitleFields={["Mini Project", "Timing"]}
+                    onUpdate={updateAnyRow}
+                    onDelete={deleteAnyRow}
+                  />
+                )}
+              />
+            ) : (
+              edt("HQ_TECH_BACKLOG", data.techBacklog, ["ID", "Mini Project", "Clinton Task", "Priority", "Status", "Reviewer / Approver", "Timing", "Owner"])
+            )}
+          </section>
         </>
       );
 
