@@ -49,13 +49,15 @@ function statusBucket(status?: string): Bucket {
   return "todo";
 }
 
+// Exactly these 4, always — no escape hatch for a stray legacy value to add
+// a 5th option. If a row somehow has something else, this select just won't
+// show it as selected until it's changed to one of the 4.
 const STATUS_OPTIONS = BUCKETS.map(b => b.label);
 function StatusSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  const options = value && !STATUS_OPTIONS.includes(value) ? [value, ...STATUS_OPTIONS] : STATUS_OPTIONS;
   return (
     <select value={value} onChange={e => onChange(e.target.value)} style={{ width: "100%", fontSize: "0.82rem", padding: "2px 4px", border: "1px solid #c0c8d8", borderRadius: 3 }}>
-      {!value && <option value="">—</option>}
-      {options.map(o => <option key={o} value={o}>{o}</option>)}
+      {!STATUS_OPTIONS.includes(value) && <option value="">—</option>}
+      {STATUS_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
     </select>
   );
 }
@@ -263,9 +265,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 }
 
 function Badge({ value }: { value?: string }) {
-  const text = value || "Open";
-  const tone = closed(text) ? "good" : /blocked|exception|high/i.test(text) ? "bad" : /progress|wait/i.test(text) ? "warn" : "";
-  return <span className={`badge ${tone}`}>{text}</span>;
+  return <span className="status-pill">{value || "—"}</span>;
 }
 
 function WorkRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: SheetRow) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
@@ -376,7 +376,7 @@ function KanbanBoard<T extends SheetRow>({
             }}
           >
             <div className="kanban-column-header">
-              <span>{col.label}</span>
+              <span className="status-pill">{col.label}</span>
               <span className="kanban-count">{items.length}</span>
             </div>
             <div className="kanban-column-body">
