@@ -27,29 +27,29 @@ const isException = (row: SheetRow) =>
   row["Management Escalation?"] === "Yes" || row["Blocked?"] === "Yes" || row["Exception?"] === "Yes";
 
 // ── Kanban status buckets ──────────────────────────────────────────────────
-// Normalizes whatever raw Status text a sheet happens to use ("Open",
-// "Not Started", "Blocked", "Waiting On Ahmad"...) into one of 4 pipeline
-// stages, so different registers can share the same board shape.
-type Bucket = "todo" | "pending" | "inProgress" | "completed";
+// One canonical 4-stage pipeline, shared by every board and every Status
+// dropdown across the app — this replaces sheet-specific status vocabularies
+// (Work's "Open"/"Done", Tech Backlog's "Not Started") with a single set, so
+// nothing drifts out of sync between sheets or between board and list view.
+// "Blocked" isn't a stage here: a blocked item just hasn't started yet from
+// the board's point of view, and the reason belongs in Reference/Input or
+// Waiting On rather than in Status.
+type Bucket = "todo" | "inProgress" | "inReview" | "completed";
 const BUCKETS: { id: Bucket; label: string }[] = [
   { id: "todo", label: "To Do" },
-  { id: "pending", label: "Pending" },
   { id: "inProgress", label: "In Progress" },
+  { id: "inReview", label: "In Review" },
   { id: "completed", label: "Completed" },
 ];
 function statusBucket(status?: string): Bucket {
   const s = (status || "").toLowerCase();
   if (/done|complete/.test(s)) return "completed";
+  if (/review/.test(s)) return "inReview";
   if (/progress/.test(s)) return "inProgress";
-  if (/block|wait|hold|pending/.test(s)) return "pending";
   return "todo";
 }
 
-// Covers both conventions already in use across sheets (Work: Open/Done,
-// Tech Backlog: Not Started/Completed) plus common extras — a dropdown here
-// instead of free text is what keeps status values matching statusBucket()
-// instead of drifting into one-off text like "Started".
-const STATUS_OPTIONS = ["Not Started", "Open", "In Progress", "Blocked", "Waiting", "On Hold", "Completed", "Done"];
+const STATUS_OPTIONS = BUCKETS.map(b => b.label);
 function StatusSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const options = value && !STATUS_OPTIONS.includes(value) ? [value, ...STATUS_OPTIONS] : STATUS_OPTIONS;
   return (
@@ -278,9 +278,7 @@ function WorkRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: SheetRo
     <article className="task-row">
       {editing ? (
         <div className="edit-fields">
-          <select value={update.status} onChange={e => setUpdate({ ...update, status: e.target.value })}>
-            <option>Open</option><option>In Progress</option><option>Done</option><option>Completed</option><option>Blocked</option>
-          </select>
+          <StatusSelect value={update.status || ""} onChange={v => setUpdate({ ...update, status: v })} />
           <input value={update.waitingOn || ""} onChange={e => setUpdate({ ...update, waitingOn: e.target.value })} placeholder="Waiting on" />
           <input value={update.result || ""} onChange={e => setUpdate({ ...update, result: e.target.value })} placeholder="Result / completion note" />
           <input value={update.evidence || ""} onChange={e => setUpdate({ ...update, evidence: e.target.value })} placeholder="Evidence / Drive link" />
@@ -406,9 +404,7 @@ function WorkKanbanCard({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: 
     return (
       <div className="kanban-card">
         <div className="edit-fields kanban-edit-fields">
-          <select value={update.status} onChange={e => setUpdate({ ...update, status: e.target.value })}>
-            <option>Open</option><option>In Progress</option><option>Done</option><option>Completed</option><option>Blocked</option>
-          </select>
+          <StatusSelect value={update.status || ""} onChange={v => setUpdate({ ...update, status: v })} />
           <input value={update.waitingOn || ""} onChange={e => setUpdate({ ...update, waitingOn: e.target.value })} placeholder="Waiting on" />
           <input value={update.result || ""} onChange={e => setUpdate({ ...update, result: e.target.value })} placeholder="Result / completion note" />
           <input value={update.evidence || ""} onChange={e => setUpdate({ ...update, evidence: e.target.value })} placeholder="Evidence / Drive link" />
@@ -851,7 +847,7 @@ export default function HomePage() {
             {workBoardView ? (
               <KanbanBoard
                 rows={data.work}
-                bucketStatus={{ todo: "Open", pending: "Blocked", inProgress: "In Progress", completed: "Done" }}
+                bucketStatus={{ todo: "To Do", inProgress: "In Progress", inReview: "In Review", completed: "Completed" }}
                 onMove={(row, status) => saveRow({ id: row.ID, type: "work", status })}
                 renderCard={row => <WorkKanbanCard row={row} onSave={saveRow} onDelete={deleteWorkItem} />}
               />
@@ -1010,7 +1006,7 @@ export default function HomePage() {
             {backlogBoardView ? (
               <KanbanBoard
                 rows={data.techBacklog}
-                bucketStatus={{ todo: "Not Started", pending: "Blocked", inProgress: "In Progress", completed: "Completed" }}
+                bucketStatus={{ todo: "To Do", inProgress: "In Progress", inReview: "In Review", completed: "Completed" }}
                 onMove={(row, status) => updateAnyRow("HQ_TECH_BACKLOG", row.ID, { Status: status })}
                 renderCard={row => (
                   <GenericKanbanCard
