@@ -16,7 +16,7 @@ const emptyData: HqBootstrap = {
   work: [], controls: [], user: "", generatedAt: "", source: "demo",
   targets: [], budgets: [], customers: [], customerIssues: [], customerFollowup: [],
   reviews: [], decisions: [], exceptions: [], plans: [], people: [], ksi: [],
-  gardeniaPipeline: [], gardeniaProduct: [], checklistDefs: [], checklistRuns: [],
+  gardeniaPipeline: [], gardeniaProduct: [], gardeniaTasks: [], checklistDefs: [], checklistRuns: [],
   legacy: [], alerts: [], property: [], financeReg: [], podcast: [], personalReg: [],
   requests: [], training: [], systemAccess: [], periods: [], notes: [], activity: [],
   techBacklog: [], customSheetDefs: [], customSheets: {},
@@ -26,49 +26,62 @@ const closed = (v = "") => /done|complete|closed/i.test(v);
 const isException = (row: SheetRow) =>
   row["Management Escalation?"] === "Yes" || row["Blocked?"] === "Yes" || row["Exception?"] === "Yes";
 
-// ── Kanban status buckets ──────────────────────────────────────────────────
-// One canonical 4-stage pipeline, shared by every board and every Status
-// dropdown across the app — this replaces sheet-specific status vocabularies
-// (Work's "Open"/"Done", Tech Backlog's "Not Started") with a single set, so
-// nothing drifts out of sync between sheets or between board and list view.
-// "Blocked" isn't a stage here: a blocked item just hasn't started yet from
-// the board's point of view, and the reason belongs in Reference/Input or
-// Waiting On rather than in Status.
-type Bucket = "todo" | "inProgress" | "inReview" | "completed";
-const BUCKETS: { id: Bucket; label: string }[] = [
-  { id: "todo", label: "To Do" },
-  { id: "inProgress", label: "In Progress" },
-  { id: "inReview", label: "In Review" },
-  { id: "completed", label: "Completed" },
-];
-function statusBucket(status?: string): Bucket {
+// ── Kanban pipelines ─────────────────────────────────────────────────────
+// A pipeline is an ordered list of stages — that order is both the column
+// display order and (for stages with a `test`) the match-priority order.
+// Exactly one stage per pipeline should omit `test`: that's the default/
+// catch-all a status falls into when nothing else matches. Different boards
+// can define entirely different pipelines (Gardenia's Fire's board doesn't
+// share Work/Tech Backlog's stages) while reusing the same board component.
+type PipelineStage = { id: string; label: string; test?: RegExp };
+type Pipeline = PipelineStage[];
+
+function bucketFor(status: string | undefined, pipeline: Pipeline): string {
   const s = (status || "").toLowerCase();
-  if (/done|complete/.test(s)) return "completed";
-  if (/review/.test(s)) return "inReview";
-  if (/progress/.test(s)) return "inProgress";
-  return "todo";
+  const matched = pipeline.find(stage => stage.test?.test(s));
+  return (matched ?? pipeline.find(stage => !stage.test) ?? pipeline[0]).id;
 }
 
-// Exactly these 4, always — no escape hatch for a stray legacy value to add
-// a 5th option. If a row somehow has something else, this select just won't
-// show it as selected until it's changed to one of the 4.
-const STATUS_OPTIONS = BUCKETS.map(b => b.label);
-function StatusSelect({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+// Work items and Tech Backlog share this one — "Blocked" isn't a stage: a
+// blocked item just hasn't started yet from the board's point of view, and
+// the reason belongs in Reference/Input or Waiting On, not in Status.
+const WORK_PIPELINE: Pipeline = [
+  { id: "todo", label: "To Do" },
+  { id: "inProgress", label: "In Progress", test: /progress/ },
+  { id: "inReview", label: "In Review", test: /review/ },
+  { id: "completed", label: "Completed", test: /done|complete/ },
+];
+
+// Gardenia's Fire gets its own pipeline, matching how that team actually
+// wants to track work — a real backlog, a WIP-limited in-progress stage,
+// and an explicit review/testing gate before Done.
+const GARDENIA_PIPELINE: Pipeline = [
+  { id: "backlog", label: "Backlog / To Do" },
+  { id: "inProgress", label: "In Progress", test: /progress/ },
+  { id: "inReview", label: "In Review / Testing", test: /review|test/ },
+  { id: "done", label: "Done", test: /done|complete/ },
+];
+
+// Exactly the given pipeline's stages, always — no escape hatch for a stray
+// legacy value to add an extra option. If a row somehow has something else,
+// this select just won't show it as selected until it's changed to a real one.
+function StatusSelect({ value, onChange, pipeline }: { value: string; onChange: (v: string) => void; pipeline: Pipeline }) {
+  const options = pipeline.map(s => s.label);
   return (
     <select value={value} onChange={e => onChange(e.target.value)} style={{ width: "100%", fontSize: "0.82rem", padding: "2px 4px", border: "1px solid #c0c8d8", borderRadius: 3 }}>
-      {!STATUS_OPTIONS.includes(value) && <option value="">—</option>}
-      {STATUS_OPTIONS.map(o => <option key={o} value={o}>{o}</option>)}
+      {!options.includes(value) && <option value="">—</option>}
+      {options.map(o => <option key={o} value={o}>{o}</option>)}
     </select>
   );
 }
 
-// Quick-glance counts of how many rows fall into each status bucket.
-function StatusSummary({ rows, statusField = "Status" }: { rows: SheetRow[]; statusField?: string }) {
-  const counts = BUCKETS.map(b => rows.filter(r => statusBucket(r[statusField]) === b.id).length);
+// Quick-glance counts of how many rows fall into each pipeline stage.
+function StatusSummary({ rows, pipeline, statusField = "Status" }: { rows: SheetRow[]; pipeline: Pipeline; statusField?: string }) {
+  const counts = pipeline.map(stage => rows.filter(r => bucketFor(r[statusField], pipeline) === stage.id).length);
   return (
     <section className="kpis-4">
-      {BUCKETS.map((b, i) => (
-        <Kpi key={b.id} label={b.label} value={counts[i]} detail={rows.length ? `${Math.round((counts[i] / rows.length) * 100)}% of ${rows.length}` : "—"} tone="" />
+      {pipeline.map((stage, i) => (
+        <Kpi key={stage.id} label={stage.label} value={counts[i]} detail={rows.length ? `${Math.round((counts[i] / rows.length) * 100)}% of ${rows.length}` : "—"} tone="" />
       ))}
     </section>
   );
@@ -76,13 +89,14 @@ function StatusSummary({ rows, statusField = "Status" }: { rows: SheetRow[]; sta
 
 // ── Generic editable data table ───────────────────────────────────────────────
 function EditableDataTable({
-  rows, sheetName, priorityCols, columns, onUpdate, onAdd, onDelete,
+  rows, sheetName, priorityCols, columns, pipeline = WORK_PIPELINE, onUpdate, onAdd, onDelete,
 }: {
   rows: SheetRow[];
   sheetName: string;
   priorityCols?: string[];
   /** Explicit header list — needed for a brand-new sheet with zero rows yet, since headers can't be inferred from data. */
   columns?: string[];
+  pipeline?: Pipeline;
   onUpdate: (sheet: string, id: string, changes: Record<string, string>) => Promise<void>;
   onAdd: (sheet: string, row: Record<string, string>) => Promise<void>;
   onDelete: (sheet: string, id: string) => Promise<void>;
@@ -151,7 +165,7 @@ function EditableDataTable({
                     {showCols.map(h => (
                       <td key={h} style={{ padding: "4px 6px" }}>
                         {h === "Status" ? (
-                          <StatusSelect value={editValues[h] ?? ""} onChange={v => setEditValues(ev => ({ ...ev, [h]: v }))} />
+                          <StatusSelect value={editValues[h] ?? ""} onChange={v => setEditValues(ev => ({ ...ev, [h]: v }))} pipeline={pipeline} />
                         ) : (
                           <input
                             value={editValues[h] ?? ""}
@@ -187,7 +201,7 @@ function EditableDataTable({
                 {showCols.map(h => (
                   <td key={h} style={{ padding: "4px 6px" }}>
                     {h === "Status" ? (
-                      <StatusSelect value={newRow[h] ?? ""} onChange={v => setNewRow(nr => ({ ...nr, [h]: v }))} />
+                      <StatusSelect value={newRow[h] ?? ""} onChange={v => setNewRow(nr => ({ ...nr, [h]: v }))} pipeline={pipeline} />
                     ) : (
                       <input
                         placeholder={h}
@@ -278,7 +292,7 @@ function WorkRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: SheetRo
     <article className="task-row">
       {editing ? (
         <div className="edit-fields">
-          <StatusSelect value={update.status || ""} onChange={v => setUpdate({ ...update, status: v })} />
+          <StatusSelect value={update.status || ""} onChange={v => setUpdate({ ...update, status: v })} pipeline={WORK_PIPELINE} />
           <input value={update.waitingOn || ""} onChange={e => setUpdate({ ...update, waitingOn: e.target.value })} placeholder="Waiting on" />
           <input value={update.result || ""} onChange={e => setUpdate({ ...update, result: e.target.value })} placeholder="Result / completion note" />
           <input value={update.evidence || ""} onChange={e => setUpdate({ ...update, evidence: e.target.value })} placeholder="Evidence / Drive link" />
@@ -347,12 +361,11 @@ function ControlRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: Shee
 // its status, and how to render its card (collapsed or in edit mode), so the
 // same board shape works for Work items and any generic register sheet.
 function KanbanBoard<T extends SheetRow>({
-  rows, statusField = "Status", bucketStatus, onMove, renderCard,
+  rows, statusField = "Status", pipeline, onMove, renderCard,
 }: {
   rows: T[];
   statusField?: string;
-  /** The Status value to write when a card is dropped into each column. */
-  bucketStatus: Record<Bucket, string>;
+  pipeline: Pipeline;
   onMove: (row: T, newStatus: string) => void;
   renderCard: (row: T) => React.ReactNode;
 }) {
@@ -361,22 +374,22 @@ function KanbanBoard<T extends SheetRow>({
 
   return (
     <div className="kanban-board">
-      {BUCKETS.map(col => {
-        const items = rows.filter(r => statusBucket(r[statusField]) === col.id);
+      {pipeline.map(stage => {
+        const items = rows.filter(r => bucketFor(r[statusField], pipeline) === stage.id);
         return (
           <div
-            key={col.id}
+            key={stage.id}
             className="kanban-column"
             onDragOver={e => e.preventDefault()}
             onDrop={() => {
               if (!dragId) return;
               const row = rows.find(r => idOf(r) === dragId);
-              if (row && statusBucket(row[statusField]) !== col.id) onMove(row, bucketStatus[col.id]);
+              if (row && bucketFor(row[statusField], pipeline) !== stage.id) onMove(row, stage.label);
               setDragId(null);
             }}
           >
             <div className="kanban-column-header">
-              <span className="status-pill">{col.label}</span>
+              <span className="status-pill">{stage.label}</span>
               <span className="kanban-count">{items.length}</span>
             </div>
             <div className="kanban-column-body">
@@ -404,7 +417,7 @@ function WorkKanbanCard({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: 
     return (
       <div className="kanban-card">
         <div className="edit-fields kanban-edit-fields">
-          <StatusSelect value={update.status || ""} onChange={v => setUpdate({ ...update, status: v })} />
+          <StatusSelect value={update.status || ""} onChange={v => setUpdate({ ...update, status: v })} pipeline={WORK_PIPELINE} />
           <input value={update.waitingOn || ""} onChange={e => setUpdate({ ...update, waitingOn: e.target.value })} placeholder="Waiting on" />
           <input value={update.result || ""} onChange={e => setUpdate({ ...update, result: e.target.value })} placeholder="Result / completion note" />
           <input value={update.evidence || ""} onChange={e => setUpdate({ ...update, evidence: e.target.value })} placeholder="Evidence / Drive link" />
@@ -430,12 +443,13 @@ function WorkKanbanCard({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: 
 }
 
 function GenericKanbanCard({
-  row, sheetName, titleField, subtitleFields, onUpdate, onDelete,
+  row, sheetName, titleField, subtitleFields, pipeline, onUpdate, onDelete,
 }: {
   row: SheetRow;
   sheetName: string;
   titleField: string;
   subtitleFields: string[];
+  pipeline: Pipeline;
   onUpdate: (sheet: string, id: string, changes: Record<string, string>) => Promise<void>;
   onDelete: (sheet: string, id: string) => Promise<void>;
 }) {
@@ -462,7 +476,7 @@ function GenericKanbanCard({
           <label key={h} className="kanban-field">
             <span>{h}</span>
             {h === "Status" ? (
-              <StatusSelect value={values[h] ?? ""} onChange={v => setValues(vv => ({ ...vv, [h]: v }))} />
+              <StatusSelect value={values[h] ?? ""} onChange={v => setValues(vv => ({ ...vv, [h]: v }))} pipeline={pipeline} />
             ) : (
               <input value={values[h] ?? ""} onChange={e => setValues(v => ({ ...v, [h]: e.target.value }))} />
             )}
@@ -632,6 +646,8 @@ export default function HomePage() {
   const [selectedCustomSheet, setSelectedCustomSheet] = useState<string>("");
   const [workBoardView, setWorkBoardView] = useState(true);
   const [backlogBoardView, setBacklogBoardView] = useState(true);
+  const [gardeniaTab, setGardeniaTab] = useState<"work" | "tasks">("work");
+  const [gardeniaTasksBoardView, setGardeniaTasksBoardView] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showGuide, setShowGuide] = useState(false);
@@ -800,8 +816,8 @@ export default function HomePage() {
   ];
 
   // Helpers for editable tables
-  const edt = (sheet: string, rows: SheetRow[], priorityCols?: string[], columns?: string[]) => (
-    <EditableDataTable rows={rows} sheetName={sheet} priorityCols={priorityCols} columns={columns} onUpdate={updateAnyRow} onAdd={addAnyRow} onDelete={deleteAnyRow} />
+  const edt = (sheet: string, rows: SheetRow[], priorityCols?: string[], columns?: string[], pipeline?: Pipeline) => (
+    <EditableDataTable rows={rows} sheetName={sheet} priorityCols={priorityCols} columns={columns} pipeline={pipeline} onUpdate={updateAnyRow} onAdd={addAnyRow} onDelete={deleteAnyRow} />
   );
 
   if (status === "loading") {
@@ -832,7 +848,7 @@ export default function HomePage() {
       case "work": return (
         <>
           <Header title="My Work" subtitle="This week · today · waiting · blocked" data={data} />
-          <StatusSummary rows={data.work} />
+          <StatusSummary rows={data.work} pipeline={WORK_PIPELINE} />
           <section className="card">
             <div className="list-toolbar">
               <span className="sub">{data.work.filter(r => !closed(r.Status)).length} active work items</span>
@@ -847,7 +863,7 @@ export default function HomePage() {
             {workBoardView ? (
               <KanbanBoard
                 rows={data.work}
-                bucketStatus={{ todo: "To Do", inProgress: "In Progress", inReview: "In Review", completed: "Completed" }}
+                pipeline={WORK_PIPELINE}
                 onMove={(row, status) => saveRow({ id: row.ID, type: "work", status })}
                 renderCard={row => <WorkKanbanCard row={row} onSave={saveRow} onDelete={deleteWorkItem} />}
               />
@@ -918,9 +934,50 @@ export default function HomePage() {
       case "gardenia": return (
         <>
           <Header title="Gardenia's Fire" subtitle="Pipeline, product and open work" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
-          <Section title="Sales Pipeline">{edt("HQ_GARDENIA_PIPELINE", data.gardeniaPipeline, ["Account / Prospect", "Stage", "Contact / Company", "Revenue / Value", "Risk", "Next Follow-up", "Owner"])}</Section>
-          <Section title="Product & Pricing">{edt("HQ_GARDENIA_PRODUCT", data.gardeniaProduct, ["Product / Test", "Test Status", "Unit Cost", "Price", "Target Margin", "Actual Margin", "Owner"])}</Section>
+          <div className="chips area-switcher">
+            <button className={`chip ${gardeniaTab === "work" ? "selected" : ""}`} onClick={() => setGardeniaTab("work")}>Work Items</button>
+            <button className={`chip ${gardeniaTab === "tasks" ? "selected" : ""}`} onClick={() => setGardeniaTab("tasks")}>▤ Tasks</button>
+          </div>
+          {gardeniaTab === "work" ? (
+            <>
+              <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+              <Section title="Sales Pipeline">{edt("HQ_GARDENIA_PIPELINE", data.gardeniaPipeline, ["Account / Prospect", "Stage", "Contact / Company", "Revenue / Value", "Risk", "Next Follow-up", "Owner"])}</Section>
+              <Section title="Product & Pricing">{edt("HQ_GARDENIA_PRODUCT", data.gardeniaProduct, ["Product / Test", "Test Status", "Unit Cost", "Price", "Target Margin", "Actual Margin", "Owner"])}</Section>
+            </>
+          ) : (
+            <>
+              <StatusSummary rows={data.gardeniaTasks} pipeline={GARDENIA_PIPELINE} />
+              <section className="card">
+              <div className="list-toolbar">
+                <span className="sub">{data.gardeniaTasks.length} tasks</span>
+                <div className="chips">
+                  <button className={`chip ${gardeniaTasksBoardView ? "selected" : ""}`} onClick={() => setGardeniaTasksBoardView(true)}>▤ Board</button>
+                  <button className={`chip ${!gardeniaTasksBoardView ? "selected" : ""}`} onClick={() => setGardeniaTasksBoardView(false)}>☰ List</button>
+                </div>
+              </div>
+              {gardeniaTasksBoardView ? (
+                <KanbanBoard
+                  rows={data.gardeniaTasks}
+                  pipeline={GARDENIA_PIPELINE}
+                  onMove={(row, status) => updateAnyRow("HQ_GARDENIA_TASKS", row.ID, { Status: status })}
+                  renderCard={row => (
+                    <GenericKanbanCard
+                      row={row}
+                      sheetName="HQ_GARDENIA_TASKS"
+                      titleField="Task"
+                      subtitleFields={["Owner", "Due"]}
+                      pipeline={GARDENIA_PIPELINE}
+                      onUpdate={updateAnyRow}
+                      onDelete={deleteAnyRow}
+                    />
+                  )}
+                />
+              ) : (
+                edt("HQ_GARDENIA_TASKS", data.gardeniaTasks, ["ID", "Task", "Description", "Priority", "Status", "Owner", "Due", "Notes"], undefined, GARDENIA_PIPELINE)
+              )}
+              </section>
+            </>
+          )}
         </>
       );
 
@@ -994,7 +1051,7 @@ export default function HomePage() {
       case "techBacklog": return (
         <>
           <Header title="Tech Backlog" subtitle="Technology, design and execution — scope, links, feedback and completion" data={data} />
-          <StatusSummary rows={data.techBacklog} />
+          <StatusSummary rows={data.techBacklog} pipeline={WORK_PIPELINE} />
           <section className="card">
             <div className="list-toolbar">
               <span className="sub">{data.techBacklog.length} tasks</span>
@@ -1006,7 +1063,7 @@ export default function HomePage() {
             {backlogBoardView ? (
               <KanbanBoard
                 rows={data.techBacklog}
-                bucketStatus={{ todo: "To Do", inProgress: "In Progress", inReview: "In Review", completed: "Completed" }}
+                pipeline={WORK_PIPELINE}
                 onMove={(row, status) => updateAnyRow("HQ_TECH_BACKLOG", row.ID, { Status: status })}
                 renderCard={row => (
                   <GenericKanbanCard
@@ -1014,6 +1071,7 @@ export default function HomePage() {
                     sheetName="HQ_TECH_BACKLOG"
                     titleField="Clinton Task"
                     subtitleFields={["Mini Project", "Timing"]}
+                    pipeline={WORK_PIPELINE}
                     onUpdate={updateAnyRow}
                     onDelete={deleteAnyRow}
                   />
@@ -1150,6 +1208,7 @@ const sheetToKey: Record<string, string> = {
   HQ_REVIEWS: "reviews", HQ_DECISIONS: "decisions", HQ_EXCEPTIONS: "exceptions",
   HQ_PLANS: "plans", HQ_PEOPLE: "people", HQ_KSI: "ksi",
   HQ_GARDENIA_PIPELINE: "gardeniaPipeline", HQ_GARDENIA_PRODUCT: "gardeniaProduct",
+  HQ_GARDENIA_TASKS: "gardeniaTasks",
   HQ_CHECKLIST_DEFS: "checklistDefs", HQ_CHECKLIST_RUNS: "checklistRuns",
   HQ_LEGACY_CLOSEOUT: "legacy", HQ_ALERTS: "alerts", HQ_PROPERTY: "property",
   HQ_FINANCE_REGISTER: "financeReg", HQ_PODCAST: "podcast",

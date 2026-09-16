@@ -20,6 +20,7 @@ export type HqBootstrap = {
   ksi: SheetRow[];
   gardeniaPipeline: SheetRow[];
   gardeniaProduct: SheetRow[];
+  gardeniaTasks: SheetRow[];
   checklistDefs: SheetRow[];
   checklistRuns: SheetRow[];
   legacy: SheetRow[];
