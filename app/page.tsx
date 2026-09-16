@@ -19,7 +19,7 @@ const emptyData: HqBootstrap = {
   gardeniaPipeline: [], gardeniaProduct: [], gardeniaTasks: [], checklistDefs: [], checklistRuns: [],
   legacy: [], alerts: [], property: [], financeReg: [], podcast: [], personalReg: [],
   requests: [], training: [], systemAccess: [], periods: [], notes: [], activity: [],
-  techBacklog: [], customSheetDefs: [], customSheets: {},
+  techBacklog: [], ironTasks: [], customSheetDefs: [], customSheets: {},
 };
 
 const closed = (v = "") => /done|complete|closed/i.test(v);
@@ -648,6 +648,8 @@ export default function HomePage() {
   const [backlogBoardView, setBacklogBoardView] = useState(true);
   const [gardeniaTab, setGardeniaTab] = useState<"work" | "tasks">("work");
   const [gardeniaTasksBoardView, setGardeniaTasksBoardView] = useState(true);
+  const [ironTab, setIronTab] = useState<"work" | "tasks">("work");
+  const [ironTasksBoardView, setIronTasksBoardView] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showGuide, setShowGuide] = useState(false);
@@ -1044,7 +1046,46 @@ export default function HomePage() {
       case "iron": return (
         <>
           <Header title="Iron Marks" subtitle="Current records" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items for Iron Marks yet.</p>}</Section>
+          <div className="chips area-switcher">
+            <button className={`chip ${ironTab === "work" ? "selected" : ""}`} onClick={() => setIronTab("work")}>Work Items</button>
+            <button className={`chip ${ironTab === "tasks" ? "selected" : ""}`} onClick={() => setIronTab("tasks")}>▤ Tasks</button>
+          </div>
+          {ironTab === "work" ? (
+            <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items for Iron Marks yet.</p>}</Section>
+          ) : (
+            <>
+              <StatusSummary rows={data.ironTasks} pipeline={GARDENIA_PIPELINE} />
+              <section className="card">
+                <div className="list-toolbar">
+                  <span className="sub">{data.ironTasks.length} tasks</span>
+                  <div className="chips">
+                    <button className={`chip ${ironTasksBoardView ? "selected" : ""}`} onClick={() => setIronTasksBoardView(true)}>▤ Board</button>
+                    <button className={`chip ${!ironTasksBoardView ? "selected" : ""}`} onClick={() => setIronTasksBoardView(false)}>☰ List</button>
+                  </div>
+                </div>
+                {ironTasksBoardView ? (
+                  <KanbanBoard
+                    rows={data.ironTasks}
+                    pipeline={GARDENIA_PIPELINE}
+                    onMove={(row, status) => updateAnyRow("HQ_IRONMARK_TASKS", row.ID, { Status: status })}
+                    renderCard={row => (
+                      <GenericKanbanCard
+                        row={row}
+                        sheetName="HQ_IRONMARK_TASKS"
+                        titleField="Task"
+                        subtitleFields={["Owner", "Due"]}
+                        pipeline={GARDENIA_PIPELINE}
+                        onUpdate={updateAnyRow}
+                        onDelete={deleteAnyRow}
+                      />
+                    )}
+                  />
+                ) : (
+                  edt("HQ_IRONMARK_TASKS", data.ironTasks, ["ID", "Task", "Description", "Priority", "Status", "Owner", "Due", "Notes"], undefined, GARDENIA_PIPELINE)
+                )}
+              </section>
+            </>
+          )}
         </>
       );
 
@@ -1208,7 +1249,7 @@ const sheetToKey: Record<string, string> = {
   HQ_REVIEWS: "reviews", HQ_DECISIONS: "decisions", HQ_EXCEPTIONS: "exceptions",
   HQ_PLANS: "plans", HQ_PEOPLE: "people", HQ_KSI: "ksi",
   HQ_GARDENIA_PIPELINE: "gardeniaPipeline", HQ_GARDENIA_PRODUCT: "gardeniaProduct",
-  HQ_GARDENIA_TASKS: "gardeniaTasks",
+  HQ_GARDENIA_TASKS: "gardeniaTasks", HQ_IRONMARK_TASKS: "ironTasks",
   HQ_CHECKLIST_DEFS: "checklistDefs", HQ_CHECKLIST_RUNS: "checklistRuns",
   HQ_LEGACY_CLOSEOUT: "legacy", HQ_ALERTS: "alerts", HQ_PROPERTY: "property",
   HQ_FINANCE_REGISTER: "financeReg", HQ_PODCAST: "podcast",
