@@ -632,6 +632,12 @@ function Home({ data, onSave, onDelete, navigate }: { data: HqBootstrap; onSave:
   const critical = open.filter(r => r["Critical Move?"] === "Yes");
   const escalated = open.filter(r => r["Management Escalation?"] === "Yes");
   const openAlerts = data.alerts.filter(r => !/resolved|closed/i.test(r.Status || ""));
+  const recentlyCompleted = [
+    ...data.work.filter(r => closed(r.Status)).map(r => ({ area: r["Project / Function"] || "—", task: r["Work Item / Next Action"] || "—", when: r["COMPLETED AT"] || r["Last Update"] || "" })),
+    ...data.gardeniaTasks.filter(r => closed(r.Status)).map(r => ({ area: "Gardenia's Fire", task: r.Task || "—", when: "" })),
+    ...data.ironTasks.filter(r => closed(r.Status)).map(r => ({ area: "Iron Marks", task: r.Task || "—", when: "" })),
+    ...data.firefliesLegacy.filter(r => closed(r.Status)).map(r => ({ area: "Fireflies & Legacy", task: r["Clinton Task"] || "—", when: "" })),
+  ].sort((a, b) => new Date(b.when || 0).getTime() - new Date(a.when || 0).getTime()).slice(0, 8);
   return (
     <>
       <Header title="Management Home" subtitle="What matters, what changed, what needs attention." data={data} />
@@ -665,17 +671,40 @@ function Home({ data, onSave, onDelete, navigate }: { data: HqBootstrap; onSave:
           </div>
         </Section>
       )}
+      <Section title="Recently Completed">
+        {recentlyCompleted.length ? (
+          <div style={{ overflowX: "auto" }}>
+            <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
+              <thead><tr>{["Area", "Task", "Completed"].map(h => <th key={h} style={{ padding: "6px 10px", background: "#173B5B", color: "#fff", textAlign: "left" }}>{h}</th>)}</tr></thead>
+              <tbody>{recentlyCompleted.map((r, i) => (
+                <tr key={i} style={{ background: i % 2 ? "#f8f9fb" : "#fff", borderBottom: "1px solid #e8eaf0" }}>
+                  <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r.area}</td>
+                  <td style={{ padding: "6px 10px" }}>{r.task}</td>
+                  <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r.when ? new Date(r.when).toLocaleDateString() : "—"}</td>
+                </tr>
+              ))}</tbody>
+            </table>
+          </div>
+        ) : <p className="sub">Nothing completed yet — closed tasks from any area will show up here.</p>}
+      </Section>
       <Section title="Recent Activity">
         {(() => {
           const recent = [...data.activity]
+            .filter(r => r["Action Type"] === "Task Assigned")
             .sort((a, b) => new Date(b.Timestamp || 0).getTime() - new Date(a.Timestamp || 0).getTime())
             .slice(0, 8);
           if (!recent.length) return <p className="sub">No activity recorded yet — captured tasks and changes will show up here.</p>;
           return (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
-                <thead><tr>{["Timestamp", "User", "Action Type", "Business / Area", "Detail"].map(h => <th key={h} style={{ padding: "6px 10px", background: "#173B5B", color: "#fff", textAlign: "left" }}>{h}</th>)}</tr></thead>
-                <tbody>{recent.map((r, i) => <tr key={i} style={{ background: i % 2 ? "#f8f9fb" : "#fff", borderBottom: "1px solid #e8eaf0" }}>{["Timestamp", "User", "Action Type", "Business / Area", "Detail"].map(h => <td key={h} style={{ padding: "6px 10px" }}>{h === "Timestamp" && r[h] ? new Date(r[h]).toLocaleString() : (r[h] || "—")}</td>)}</tr>)}</tbody>
+                <thead><tr>{["Timestamp", "Business / Area", "Detail"].map(h => <th key={h} style={{ padding: "6px 10px", background: "#173B5B", color: "#fff", textAlign: "left" }}>{h}</th>)}</tr></thead>
+                <tbody>{recent.map((r, i) => (
+                  <tr key={i} style={{ background: i % 2 ? "#f8f9fb" : "#fff", borderBottom: "1px solid #e8eaf0" }}>
+                    <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r.Timestamp ? new Date(r.Timestamp).toLocaleString() : "—"}</td>
+                    <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r["Business / Area"] || "—"}</td>
+                    <td style={{ padding: "6px 10px" }}>{r.Detail || "—"}</td>
+                  </tr>
+                ))}</tbody>
               </table>
             </div>
           );
@@ -711,6 +740,7 @@ export default function HomePage() {
   const [gardeniaPipelineBoardView, setGardeniaPipelineBoardView] = useState(true);
   const [ironTab, setIronTab] = useState<"work" | "tasks">("work");
   const [ironTasksBoardView, setIronTasksBoardView] = useState(true);
+  const [areaWorkBoardView, setAreaWorkBoardView] = useState(true);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showGuide, setShowGuide] = useState(false);
@@ -921,6 +951,33 @@ export default function HomePage() {
     <EditableDataTable rows={rows} sheetName={sheet} priorityCols={priorityCols} columns={columns} pipeline={pipeline} statusField={statusField} onUpdate={updateAnyRow} onAdd={addAnyRow} onDelete={deleteAnyRow} />
   );
 
+  // Board/list Work Items view shared by the areas that don't have their own
+  // dedicated task sheet — same Board/List pattern as My Work and the areas
+  // that do (Gardenia's Fire, Iron Marks), just scoped to that area's rows.
+  const workItemsBoard = (rows: SheetRow[]) => (
+    <section className="card">
+      <div className="list-toolbar">
+        <span className="sub">{rows.filter(r => !closed(r.Status)).length} active work items</span>
+        <div className="chips">
+          <button className={`chip ${areaWorkBoardView ? "selected" : ""}`} onClick={() => setAreaWorkBoardView(true)}>▤ Board</button>
+          <button className={`chip ${!areaWorkBoardView ? "selected" : ""}`} onClick={() => setAreaWorkBoardView(false)}>☰ List</button>
+        </div>
+      </div>
+      {rows.length === 0 ? (
+        <p className="sub">No work items.</p>
+      ) : areaWorkBoardView ? (
+        <KanbanBoard
+          rows={rows}
+          pipeline={WORK_PIPELINE}
+          onMove={(row, status) => saveRow({ id: row.ID, type: "work", status })}
+          renderCard={row => <WorkKanbanCard row={row} onSave={saveRow} onDelete={deleteWorkItem} />}
+        />
+      ) : (
+        rows.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />)
+      )}
+    </section>
+  );
+
   if (status === "loading") {
     return <main className="system-shell"><div className="card loading-state">Connecting to authentication...</div></main>;
   }
@@ -1042,7 +1099,8 @@ export default function HomePage() {
           </div>
           {gardeniaTab === "work" && (
             <>
-              <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+              <StatusSummary rows={visibleWork} pipeline={WORK_PIPELINE} />
+              {workItemsBoard(visibleWork)}
               <Section title="Product & Pricing">{edt("HQ_GARDENIA_PRODUCT", data.gardeniaProduct, ["Product / Test", "Test Status", "Unit Cost", "Price", "Target Margin", "Actual Margin", "Owner"])}</Section>
             </>
           )}
@@ -1122,7 +1180,8 @@ export default function HomePage() {
       case "finance": return (
         <>
           <Header title="Finance & Office" subtitle="Finance register, budgets and open work" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <StatusSummary rows={visibleWork} pipeline={WORK_PIPELINE} />
+          {workItemsBoard(visibleWork)}
           <Section title="Finance Register">{edt("HQ_FINANCE_REGISTER", data.financeReg, ["Register Type", "Entity / Property", "Account / Policy / Vendor / Tax", "Status", "Amount / Balance", "Due / Next Date", "Owner"])}</Section>
           <Section title="Budgets">{edt("HQ_BUDGETS", data.budgets, ["Year", "Month", "Business", "Revenue Budget", "Net Profit Budget", "Owner"])}</Section>
         </>
@@ -1131,7 +1190,8 @@ export default function HomePage() {
       case "property": return (
         <>
           <Header title="Buyahka / Property" subtitle="Property items, renewals and next actions" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <StatusSummary rows={visibleWork} pipeline={WORK_PIPELINE} />
+          {workItemsBoard(visibleWork)}
           <Section title="Property Register">{edt("HQ_PROPERTY", data.property, ["Property", "Category", "Item", "Status", "Amount", "Due / Renewal", "Owner", "Next Action"])}</Section>
         </>
       );
@@ -1139,7 +1199,8 @@ export default function HomePage() {
       case "people": return (
         <>
           <Header title="People & Systems" subtitle="Team, training and system access" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <StatusSummary rows={visibleWork} pipeline={WORK_PIPELINE} />
+          {workItemsBoard(visibleWork)}
           <Section title="People">{edt("HQ_PEOPLE", data.people, ["Name", "Role", "Function / Area", "Availability", "Coverage Status", "Training Status", "Active?"])}</Section>
           <Section title="Training">{edt("HQ_TRAINING", data.training, ["Business / Area", "Role / Person", "Capability / Training", "Required?", "Status", "Due", "Owner"])}</Section>
           <Section title="System Access">{edt("HQ_SYSTEM_ACCESS", data.systemAccess, ["System / Account", "User / Role", "Access Level", "Status", "Owner / Admin", "Last Verified"])}</Section>
@@ -1149,7 +1210,8 @@ export default function HomePage() {
       case "personal": return (
         <>
           <Header title="Personal / Ahmad" subtitle="Personal register and open work" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <StatusSummary rows={visibleWork} pipeline={WORK_PIPELINE} />
+          {workItemsBoard(visibleWork)}
           <Section title="Personal Register">{edt("HQ_PERSONAL_REGISTER", data.personalReg, ["Register Type", "Item / Account / Policy", "Status", "Amount", "Expected / Renewal / Due", "Owner", "Exception?"])}</Section>
         </>
       );
@@ -1157,7 +1219,8 @@ export default function HomePage() {
       case "store": return (
         <>
           <Header title="Edible - Store" subtitle="Operations, checklists and open work" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
+          <StatusSummary rows={visibleWork} pipeline={WORK_PIPELINE} />
+          {workItemsBoard(visibleWork)}
           <Section title="Checklist Runs">{edt("HQ_CHECKLIST_RUNS", data.checklistRuns.filter(r => /edible/i.test(r.Business || "")), ["Checklist Name", "Period Key", "Status", "Completion %", "On Time?", "Owner"])}</Section>
         </>
       );
@@ -1281,12 +1344,21 @@ export default function HomePage() {
               {activityHistory.length ? (
                 <div style={{ overflowX: "auto" }}>
                   <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
-                    <thead><tr>{["Timestamp", "Business / Area", "Detail"].map(h => <th key={h} style={{ padding: "6px 10px", background: "#173B5B", color: "#fff", textAlign: "left" }}>{h}</th>)}</tr></thead>
+                    <thead><tr>{["Timestamp", "Business / Area", "Detail", "Actions"].map(h => <th key={h} style={{ padding: "6px 10px", background: "#173B5B", color: "#fff", textAlign: "left" }}>{h}</th>)}</tr></thead>
                     <tbody>{activityHistory.map((r, i) => (
                       <tr key={i} style={{ background: i % 2 ? "#f8f9fb" : "#fff", borderBottom: "1px solid #e8eaf0" }}>
                         <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r.Timestamp ? new Date(r.Timestamp).toLocaleString() : "—"}</td>
                         <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r["Business / Area"] || "—"}</td>
                         <td style={{ padding: "6px 10px" }}>{r.Detail || "—"}</td>
+                        <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
+                          <button
+                            className="link-button"
+                            style={{ color: "#ae493e" }}
+                            onClick={() => { if (confirm("Delete this history entry? This cannot be undone.")) deleteAnyRow("HQ_ACTIVITY", r.Timestamp); }}
+                          >
+                            Delete
+                          </button>
+                        </td>
                       </tr>
                     ))}</tbody>
                   </table>
