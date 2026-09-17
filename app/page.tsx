@@ -66,6 +66,7 @@ const GARDENIA_PIPELINE: Pipeline = [
 // stages — this tracks prospects/accounts through the actual sales cycle.
 const SALES_PIPELINE: Pipeline = [
   { id: "toResearch", label: "To Research" },
+  { id: "priority", label: "Priority", test: /priority/ },
   { id: "attempted", label: "Attempted", test: /attempt/ },
   { id: "qualified", label: "Qualified", test: /qualif/ },
   { id: "tastingScheduled", label: "Tasting Scheduled", test: /tasting sched/ },
