@@ -8,8 +8,8 @@ import { functions } from "@/lib/hq-types";
 type View =
   | "home" | "work" | "operate" | "manage" | "close" | "intel"
   | "customers" | "decisions" | "add"
-  | "store" | "edible" | "gardenia" | "finance" | "legacy"
-  | "property" | "people" | "podcast" | "personal" | "iron"
+  | "store" | "edible" | "gardenia" | "finance"
+  | "property" | "people" | "personal" | "iron"
   | "firefliesLegacy" | "custom" | "newSheet";
 
 const emptyData: HqBootstrap = {
@@ -17,7 +17,7 @@ const emptyData: HqBootstrap = {
   targets: [], budgets: [], customers: [], customerIssues: [], customerFollowup: [],
   reviews: [], decisions: [], exceptions: [], plans: [], people: [], ksi: [],
   gardeniaPipeline: [], gardeniaProduct: [], gardeniaTasks: [], checklistDefs: [], checklistRuns: [],
-  legacy: [], alerts: [], property: [], financeReg: [], podcast: [], personalReg: [],
+  alerts: [], property: [], financeReg: [], personalReg: [],
   requests: [], training: [], systemAccess: [], periods: [], notes: [], activity: [],
   firefliesLegacy: [], ironTasks: [], customSheetDefs: [], customSheets: {},
 };
@@ -531,7 +531,7 @@ const guideSteps: { title: string; body: string }[] = [
   },
   {
     title: "Operating area tabs",
-    body: "Each business area — Edible, Gardenia's Fire, Finance & Office, Legacy Closeout, Property, People & Systems, Podcast & Legacy, Personal/Ahmad, Iron Marks — has its own tab. Opening one shows only that area's work items plus the registers specific to it (e.g. Finance & Office shows the Finance Register; Gardenia's Fire shows its Sales Pipeline). Use these when you want to focus on one part of the business instead of everything at once.",
+    body: "Each business area — Edible, Gardenia's Fire, Finance & Office, Property, People & Systems, Personal/Ahmad, Iron Marks — has its own tab. Opening one shows only that area's work items plus the registers specific to it (e.g. Finance & Office shows the Finance Register; Gardenia's Fire shows its Sales Pipeline). Use these when you want to focus on one part of the business instead of everything at once.",
   },
   {
     title: "Close / Review and Intelligence",
@@ -574,10 +574,8 @@ const areas: { id: View; label: string; icon: string; match: string[] }[] = [
   { id: "edible", label: "EDIBLE - MANAGEMENT", icon: "▤", match: ["edible"] },
   { id: "gardenia", label: "GARDENIA'S FIRE", icon: "✿", match: ["gardenia"] },
   { id: "finance", label: "FINANCE & OFFICE", icon: "$", match: ["finance"] },
-  { id: "legacy", label: "LEGACY CLOSEOUT", icon: "▣", match: ["legacy"] },
   { id: "property", label: "BUYAHKA / PROPERTY", icon: "▥", match: ["property"] },
   { id: "people", label: "PEOPLE & SYSTEMS", icon: "♟", match: ["people"] },
-  { id: "podcast", label: "PODCAST & LEGACY", icon: "◉", match: ["podcast"] },
   { id: "personal", label: "PERSONAL / AHMAD", icon: "●", match: ["personal", "ahmad"] },
   { id: "iron", label: "IRON MARKS", icon: "◇", match: ["iron"] },
 ];
@@ -992,14 +990,6 @@ export default function HomePage() {
         </>
       );
 
-      case "legacy": return (
-        <>
-          <Header title="Legacy Closeout" subtitle="Open obligations and closeout status" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
-          <Section title="Legacy Closeout Register">{edt("HQ_LEGACY_CLOSEOUT", data.legacy, ["Item ID", "Old Company / Entity", "Creditor / Issue", "Amount / Exposure", "Stage", "Risk", "Owner", "Status"])}</Section>
-        </>
-      );
-
       case "property": return (
         <>
           <Header title="Buyahka / Property" subtitle="Property items, renewals and next actions" data={data} />
@@ -1015,14 +1005,6 @@ export default function HomePage() {
           <Section title="People">{edt("HQ_PEOPLE", data.people, ["Name", "Role", "Function / Area", "Availability", "Coverage Status", "Training Status", "Active?"])}</Section>
           <Section title="Training">{edt("HQ_TRAINING", data.training, ["Business / Area", "Role / Person", "Capability / Training", "Required?", "Status", "Due", "Owner"])}</Section>
           <Section title="System Access">{edt("HQ_SYSTEM_ACCESS", data.systemAccess, ["System / Account", "User / Role", "Access Level", "Status", "Owner / Admin", "Last Verified"])}</Section>
-        </>
-      );
-
-      case "podcast": return (
-        <>
-          <Header title="Podcast & Legacy" subtitle="Production pipeline and assets" data={data} />
-          <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items.</p>}</Section>
-          <Section title="Podcast Pipeline">{edt("HQ_PODCAST", data.podcast, ["Item ID", "Episode / Asset", "Stage", "Item Type", "Owner", "Due", "Status", "Next Action"])}</Section>
         </>
       );
 
@@ -1251,8 +1233,8 @@ const sheetToKey: Record<string, string> = {
   HQ_GARDENIA_PIPELINE: "gardeniaPipeline", HQ_GARDENIA_PRODUCT: "gardeniaProduct",
   HQ_GARDENIA_TASKS: "gardeniaTasks", HQ_IRONMARK_TASKS: "ironTasks",
   HQ_CHECKLIST_DEFS: "checklistDefs", HQ_CHECKLIST_RUNS: "checklistRuns",
-  HQ_LEGACY_CLOSEOUT: "legacy", HQ_ALERTS: "alerts", HQ_PROPERTY: "property",
-  HQ_FINANCE_REGISTER: "financeReg", HQ_PODCAST: "podcast",
+  HQ_ALERTS: "alerts", HQ_PROPERTY: "property",
+  HQ_FINANCE_REGISTER: "financeReg",
   HQ_PERSONAL_REGISTER: "personalReg", HQ_REQUESTS: "requests",
   HQ_TRAINING: "training", HQ_SYSTEM_ACCESS: "systemAccess",
   HQ_PERIODS: "periods", HQ_NOTES: "notes", HQ_ACTIVITY: "activity",

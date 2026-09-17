@@ -23,11 +23,9 @@ export type HqBootstrap = {
   gardeniaTasks: SheetRow[];
   checklistDefs: SheetRow[];
   checklistRuns: SheetRow[];
-  legacy: SheetRow[];
   alerts: SheetRow[];
   property: SheetRow[];
   financeReg: SheetRow[];
-  podcast: SheetRow[];
   personalReg: SheetRow[];
   requests: SheetRow[];
   training: SheetRow[];
