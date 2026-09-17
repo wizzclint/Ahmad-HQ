@@ -80,7 +80,7 @@ async function nextWorkId(): Promise<string> {
 export async function addWork(item: SheetRow) {
   if (await isDemoData()) return { ok: true, source: "demo" as const, id: `W-${Date.now()}` };
   const id = await nextWorkId();
-  await (await getSheets()).spreadsheets.values.append({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE"}!A:U`, valueInputOption: "USER_ENTERED", requestBody: { values: [[id, item["Project / Function"], item["Work Item / Next Action"], item.Owner, "Action", "PUSH", "No", "Yes", item["Due Date"], "Open", "", "No", "", "", new Date().toISOString(), new Date().toISOString(), "No", "", "", "", "0d"]] } });
+  await (await getSheets()).spreadsheets.values.append({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE"}!A:U`, valueInputOption: "USER_ENTERED", requestBody: { values: [[id, item["Project / Function"], item["Work Item / Next Action"], item.Owner, "Action", item.Priority || "PUSH", "No", "Yes", item["Due Date"], "Open", "", "No", "", "", new Date().toISOString(), new Date().toISOString(), "No", "", "", "", "0d"]] } });
   return { ok: true, source: "sheets" as const, id };
 }
 
