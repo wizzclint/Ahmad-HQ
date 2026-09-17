@@ -10,7 +10,7 @@ type View =
   | "customers" | "decisions" | "add"
   | "store" | "edible" | "gardenia" | "finance" | "legacy"
   | "property" | "people" | "podcast" | "personal" | "iron"
-  | "techBacklog" | "custom" | "newSheet";
+  | "firefliesLegacy" | "custom" | "newSheet";
 
 const emptyData: HqBootstrap = {
   work: [], controls: [], user: "", generatedAt: "", source: "demo",
@@ -19,7 +19,7 @@ const emptyData: HqBootstrap = {
   gardeniaPipeline: [], gardeniaProduct: [], gardeniaTasks: [], checklistDefs: [], checklistRuns: [],
   legacy: [], alerts: [], property: [], financeReg: [], podcast: [], personalReg: [],
   requests: [], training: [], systemAccess: [], periods: [], notes: [], activity: [],
-  techBacklog: [], ironTasks: [], customSheetDefs: [], customSheets: {},
+  firefliesLegacy: [], ironTasks: [], customSheetDefs: [], customSheets: {},
 };
 
 const closed = (v = "") => /done|complete|closed/i.test(v);
@@ -32,7 +32,7 @@ const isException = (row: SheetRow) =>
 // Exactly one stage per pipeline should omit `test`: that's the default/
 // catch-all a status falls into when nothing else matches. Different boards
 // can define entirely different pipelines (Gardenia's Fire's board doesn't
-// share Work/Tech Backlog's stages) while reusing the same board component.
+// share Work/Fireflies & Legacy's stages) while reusing the same board component.
 type PipelineStage = { id: string; label: string; test?: RegExp };
 type Pipeline = PipelineStage[];
 
@@ -42,7 +42,7 @@ function bucketFor(status: string | undefined, pipeline: Pipeline): string {
   return (matched ?? pipeline.find(stage => !stage.test) ?? pipeline[0]).id;
 }
 
-// Work items and Tech Backlog share this one — "Blocked" isn't a stage: a
+// Work items and Fireflies & Legacy share this one — "Blocked" isn't a stage: a
 // blocked item just hasn't started yet from the board's point of view, and
 // the reason belongs in Reference/Input or Waiting On, not in Status.
 const WORK_PIPELINE: Pipeline = [
@@ -814,7 +814,7 @@ export default function HomePage() {
     ["home", "HOME", "▣"], ["work", "MY WORK", "✓"], ["manage", "MANAGE", "◎"],
     ...areas.map(a => [a.id, a.label, a.icon] as [View, string, string]),
     ["close", "CLOSE / REVIEW", "✓"], ["intel", "INTELLIGENCE", "⌁"],
-    ["techBacklog", "TECH BACKLOG", "⚙"],
+    ["firefliesLegacy", "FIREFLIES & LEGACY", "⚙"],
   ];
 
   // Helpers for editable tables
@@ -1089,13 +1089,13 @@ export default function HomePage() {
         </>
       );
 
-      case "techBacklog": return (
+      case "firefliesLegacy": return (
         <>
-          <Header title="Tech Backlog" subtitle="Technology, design and execution — scope, links, feedback and completion" data={data} />
-          <StatusSummary rows={data.techBacklog} pipeline={WORK_PIPELINE} />
+          <Header title="Fireflies & Legacy" subtitle="Video, brand and delivery work — scope, links, feedback and completion" data={data} />
+          <StatusSummary rows={data.firefliesLegacy} pipeline={WORK_PIPELINE} />
           <section className="card">
             <div className="list-toolbar">
-              <span className="sub">{data.techBacklog.length} tasks</span>
+              <span className="sub">{data.firefliesLegacy.length} tasks</span>
               <div className="chips">
                 <button className={`chip ${backlogBoardView ? "selected" : ""}`} onClick={() => setBacklogBoardView(true)}>▤ Board</button>
                 <button className={`chip ${!backlogBoardView ? "selected" : ""}`} onClick={() => setBacklogBoardView(false)}>☰ List</button>
@@ -1103,13 +1103,13 @@ export default function HomePage() {
             </div>
             {backlogBoardView ? (
               <KanbanBoard
-                rows={data.techBacklog}
+                rows={data.firefliesLegacy}
                 pipeline={WORK_PIPELINE}
-                onMove={(row, status) => updateAnyRow("HQ_TECH_BACKLOG", row.ID, { Status: status })}
+                onMove={(row, status) => updateAnyRow("HQ_FIREFLIES_LEGACY", row.ID, { Status: status })}
                 renderCard={row => (
                   <GenericKanbanCard
                     row={row}
-                    sheetName="HQ_TECH_BACKLOG"
+                    sheetName="HQ_FIREFLIES_LEGACY"
                     titleField="Clinton Task"
                     subtitleFields={["Mini Project", "Timing"]}
                     pipeline={WORK_PIPELINE}
@@ -1119,7 +1119,7 @@ export default function HomePage() {
                 )}
               />
             ) : (
-              edt("HQ_TECH_BACKLOG", data.techBacklog, ["ID", "Mini Project", "Clinton Task", "Priority", "Status", "Reviewer / Approver", "Timing", "Owner"])
+              edt("HQ_FIREFLIES_LEGACY", data.firefliesLegacy, ["ID", "Mini Project", "Clinton Task", "Priority", "Status", "Reviewer / Approver", "Timing", "Owner"])
             )}
           </section>
         </>
@@ -1256,5 +1256,5 @@ const sheetToKey: Record<string, string> = {
   HQ_PERSONAL_REGISTER: "personalReg", HQ_REQUESTS: "requests",
   HQ_TRAINING: "training", HQ_SYSTEM_ACCESS: "systemAccess",
   HQ_PERIODS: "periods", HQ_NOTES: "notes", HQ_ACTIVITY: "activity",
-  HQ_TECH_BACKLOG: "techBacklog",
+  HQ_FIREFLIES_LEGACY: "firefliesLegacy",
 };

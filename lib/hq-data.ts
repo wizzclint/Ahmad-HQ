@@ -408,7 +408,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
       legacy: EMPTY, alerts: EMPTY, property: EMPTY, financeReg: EMPTY,
       podcast: EMPTY, personalReg: EMPTY, requests: EMPTY, training: EMPTY,
       systemAccess: EMPTY, periods: EMPTY, notes: EMPTY, activity: EMPTY,
-      techBacklog: EMPTY, ironTasks: EMPTY, customSheetDefs: [], customSheets: {},
+      firefliesLegacy: EMPTY, ironTasks: EMPTY, customSheetDefs: [], customSheets: {},
     };
   }
 
@@ -420,7 +420,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
     gardeniaPipeline, gardeniaProduct, gardeniaTasks, checklistDefs, checklistRuns,
     legacy, alerts, property, financeReg, podcast, personalReg,
     requests, training, systemAccess, periods, notes, activity,
-    techBacklog, ironTasks, customSheetDefs,
+    firefliesLegacy, ironTasks, customSheetDefs,
   ] = await Promise.all([
     readSheet(process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE", 5, "U"),
     readSheet(process.env.GOOGLE_CLOSE_SHEET ?? "WEEK CLOSE — UPDATE", 1, "J"),
@@ -436,7 +436,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
     s("HQ_REQUESTS"), s("HQ_TRAINING"),
     s("HQ_SYSTEM_ACCESS"), s("HQ_PERIODS"),
     s("HQ_NOTES"), s("HQ_ACTIVITY"),
-    s("HQ_TECH_BACKLOG"), s("HQ_IRONMARK_TASKS"), listCustomSheets().catch(() => []),
+    s("HQ_FIREFLIES_LEGACY"), s("HQ_IRONMARK_TASKS"), listCustomSheets().catch(() => []),
   ]);
 
   // Dynamically-created sheets aren't known at compile time, so their data
@@ -455,7 +455,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
     gardeniaPipeline, gardeniaProduct, gardeniaTasks, checklistDefs, checklistRuns,
     legacy, alerts, property, financeReg, podcast, personalReg,
     requests, training, systemAccess, periods, notes, activity,
-    techBacklog, ironTasks, customSheetDefs, customSheets,
+    firefliesLegacy, ironTasks, customSheetDefs, customSheets,
   };
 
   return user ? filterBootstrapForUser(raw, user) : raw;

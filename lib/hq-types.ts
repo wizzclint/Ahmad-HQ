@@ -35,7 +35,7 @@ export type HqBootstrap = {
   periods: SheetRow[];
   notes: SheetRow[];
   activity: SheetRow[];
-  techBacklog: SheetRow[];
+  firefliesLegacy: SheetRow[];
   ironTasks: SheetRow[];
   // Sheets created at runtime via "+ New Register" — not known at compile
   // time, so their data lives in a lookup keyed by sheet name instead of a
