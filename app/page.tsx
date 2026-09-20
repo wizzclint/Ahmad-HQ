@@ -198,6 +198,90 @@ const CAPTURE_ROUTES: Record<string, CaptureRoute> = {
   personal: { label: "Personal / Ahmad", kind: "work" },
 };
 
+// ── Area pages ───────────────────────────────────────────────────────────
+// Edible - Store, Gardenia's Fire, Finance & Office and Iron Marks share one
+// page template (Summary, Tasks, Weekly Closing, KPIs) plus tabs that only
+// make sense for that business. Adding a tab to an area = one entry in its
+// `tabs` list here plus one case in renderAreaTab().
+type AreaTab = { id: string; label: string };
+type AreaPage = { title: string; subtitle: string; label: string; business: RegExp; captureKey: string; tabs: AreaTab[] };
+
+const AREA_PAGES: Record<string, AreaPage> = {
+  store: {
+    title: "Edible - Store", subtitle: "Operations, checklists, customers and the weekly close",
+    label: "Edible", business: /edible/i, captureKey: "edible",
+    tabs: [
+      { id: "summary", label: "Summary" }, { id: "tasks", label: "▤ Tasks" }, { id: "checklists", label: "Checklists" },
+      { id: "customers", label: "Customers & Reviews" }, { id: "closing", label: "Weekly Closing" }, { id: "kpi", label: "KPIs" },
+    ],
+  },
+  gardenia: {
+    title: "Gardenia's Fire", subtitle: "Sales pipeline, product, customers and the weekly close",
+    label: "Gardenia's Fire", business: /gardenia/i, captureKey: "gardenia",
+    tabs: [
+      { id: "summary", label: "Summary" }, { id: "tasks", label: "▤ Tasks" }, { id: "pipeline", label: "◆ Sales Pipeline" },
+      { id: "product", label: "Product & Pricing" }, { id: "customers", label: "Customers & Follow-ups" },
+      { id: "closing", label: "Weekly Closing" }, { id: "kpi", label: "KPIs" },
+    ],
+  },
+  finance: {
+    title: "Finance & Office", subtitle: "Finance register, budgets and the weekly close",
+    label: "Finance & Office", business: /finance/i, captureKey: "finance",
+    tabs: [
+      { id: "summary", label: "Summary" }, { id: "tasks", label: "▤ Tasks" }, { id: "register", label: "Finance Register" },
+      { id: "budgets", label: "Budgets" }, { id: "closing", label: "Weekly Closing" }, { id: "kpi", label: "KPIs" },
+    ],
+  },
+  iron: {
+    title: "Iron Marks", subtitle: "Tasks, the weekly close and how the project is tracking",
+    label: "Iron Marks", business: /iron/i, captureKey: "iron",
+    tabs: [
+      { id: "summary", label: "Summary" }, { id: "tasks", label: "▤ Tasks" },
+      { id: "closing", label: "Weekly Closing" }, { id: "kpi", label: "KPIs" },
+    ],
+  },
+};
+
+// ISO-8601 week key like "2026-W38" — used to label each weekly wrap-up.
+function isoWeekKey(d = new Date()): string {
+  const t = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  const yearStart = new Date(Date.UTC(t.getUTCFullYear(), 0, 1));
+  const week = Math.ceil(((t.getTime() - yearStart.getTime()) / 86400000 + 1) / 7);
+  return `${t.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+// The weekly-close wrap-up: four short prompts saved as one note per week.
+function WeeklyWrapUpForm({ weekKey, onSave }: { weekKey: string; onSave: (note: string) => Promise<void> }) {
+  const [fields, setFields] = useState({ wins: "", misses: "", blockers: "", next: "" });
+  const set = (k: keyof typeof fields) => (e: React.ChangeEvent<HTMLTextAreaElement>) => setFields(f => ({ ...f, [k]: e.target.value }));
+  const empty = !Object.values(fields).some(v => v.trim());
+  return (
+    <div className="form-grid">
+      <label className="full">Wins — what went well<textarea rows={2} value={fields.wins} onChange={set("wins")} placeholder="Orders won, tasks finished, good news…" /></label>
+      <label className="full">Misses — what slipped<textarea rows={2} value={fields.misses} onChange={set("misses")} placeholder="What didn't get done, and why?" /></label>
+      <label className="full">Blockers — what&apos;s in the way<textarea rows={2} value={fields.blockers} onChange={set("blockers")} placeholder="Anything that needs a decision or help" /></label>
+      <label className="full">Next week&apos;s priorities<textarea rows={2} value={fields.next} onChange={set("next")} placeholder="The 2–3 things that matter most next week" /></label>
+      <AsyncButton
+        className="btn primary"
+        pendingLabel="Saving…"
+        disabled={empty}
+        onClick={async () => {
+          const note = ([["Wins", fields.wins], ["Misses", fields.misses], ["Blockers", fields.blockers], ["Next week", fields.next]] as const)
+            .filter(([, v]) => v.trim())
+            .map(([k, v]) => `${k}: ${v.trim()}`)
+            .join("\n");
+          await onSave(note);
+          setFields({ wins: "", misses: "", blockers: "", next: "" });
+        }}
+      >
+        Save {weekKey} wrap-up
+      </AsyncButton>
+    </div>
+  );
+}
+
 // Exactly the given pipeline's stages, always — no escape hatch for a stray
 // legacy value to add an extra option. If a row somehow has something else,
 // this select just won't show it as selected until it's changed to a real one.
@@ -225,11 +309,13 @@ function StatusSummary({ rows, pipeline, statusField = "Status" }: { rows: Sheet
 
 // ── Generic editable data table ───────────────────────────────────────────────
 function EditableDataTable({
-  rows, sheetName, priorityCols, columns, pipeline = WORK_PIPELINE, statusField = "Status", onUpdate, onAdd, onDelete,
+  rows, sheetName, priorityCols, columns, pipeline = WORK_PIPELINE, statusField = "Status", defaults, onUpdate, onAdd, onDelete,
 }: {
   rows: SheetRow[];
   sheetName: string;
   priorityCols?: string[];
+  /** Pre-filled values for new rows — used when the table is filtered (e.g. to one business) so a new row doesn't vanish from the view it was added in. */
+  defaults?: Record<string, string>;
   /** Explicit header list — needed for a brand-new sheet with zero rows yet, since headers can't be inferred from data. */
   columns?: string[];
   pipeline?: Pipeline;
@@ -367,7 +453,7 @@ function EditableDataTable({
       </div>
       <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 12 }}>
         <p className="sub" style={{ margin: 0 }}>{rows.length} record{rows.length !== 1 ? "s" : ""}{headers.length > 8 ? ` · ${headers.length - 8} more columns hidden` : ""}</p>
-        {!adding && <button className="btn" style={{ fontSize: "0.78rem", padding: "3px 10px" }} onClick={() => setAdding(true)}>＋ Add row</button>}
+        {!adding && <button className="btn" style={{ fontSize: "0.78rem", padding: "3px 10px" }} onClick={() => { setNewRow({ ...defaults }); setAdding(true); }}>＋ Add row</button>}
       </div>
     </div>
   );
@@ -834,10 +920,10 @@ export default function HomePage() {
   const [selectedCustomSheet, setSelectedCustomSheet] = useState<string>("");
   const [workBoardView, setWorkBoardView] = useState(true);
   const [backlogBoardView, setBacklogBoardView] = useState(true);
-  const [gardeniaTab, setGardeniaTab] = useState<"work" | "tasks" | "pipeline">("work");
+  const [areaTab, setAreaTab] = useState<Record<string, string>>({});
+  const [captureArea, setCaptureArea] = useState("");
   const [gardeniaTasksBoardView, setGardeniaTasksBoardView] = useState(true);
   const [gardeniaPipelineBoardView, setGardeniaPipelineBoardView] = useState(true);
-  const [ironTab, setIronTab] = useState<"work" | "tasks">("work");
   const [ironTasksBoardView, setIronTasksBoardView] = useState(true);
   const [areaWorkBoardView, setAreaWorkBoardView] = useState(true);
   const [assigning, setAssigning] = useState(false);
@@ -1091,7 +1177,10 @@ export default function HomePage() {
     }
   }
 
-  const nav = (v: View) => setView(v);
+  const nav = (v: View) => {
+    if (v === "add") setCaptureArea("");
+    setView(v);
+  };
 
   const mainNav: [View, string, string][] = [
     ["home", "HOME", "▣"], ["work", "MY WORK", "✓"], ["manage", "MANAGE", "◎"],
@@ -1101,8 +1190,8 @@ export default function HomePage() {
   ];
 
   // Helpers for editable tables
-  const edt = (sheet: string, rows: SheetRow[], priorityCols?: string[], columns?: string[], pipeline?: Pipeline, statusField?: string) => (
-    <EditableDataTable rows={rows} sheetName={sheet} priorityCols={priorityCols} columns={columns} pipeline={pipeline} statusField={statusField} onUpdate={updateAnyRow} onAdd={addAnyRow} onDelete={deleteAnyRow} />
+  const edt = (sheet: string, rows: SheetRow[], priorityCols?: string[], columns?: string[], pipeline?: Pipeline, statusField?: string, defaults?: Record<string, string>) => (
+    <EditableDataTable rows={rows} sheetName={sheet} priorityCols={priorityCols} columns={columns} pipeline={pipeline} statusField={statusField} defaults={defaults} onUpdate={updateAnyRow} onAdd={addAnyRow} onDelete={deleteAnyRow} />
   );
 
   // Board/list Work Items view shared by the areas that don't have their own
@@ -1147,6 +1236,308 @@ export default function HomePage() {
           </button>
         </div>
       </main>
+    );
+  }
+
+  // ── Area pages: Summary / Tasks / Weekly Closing / KPIs + business-specific tabs ──
+  const openCapture = (captureKey: string) => { setCaptureArea(captureKey); setView("add"); };
+  const byTimestampDesc = (a: SheetRow, b: SheetRow) => new Date(b.Timestamp || 0).getTime() - new Date(a.Timestamp || 0).getTime();
+  const colsOf = (all: SheetRow[], fallback: string[]) => (all.length ? Object.keys(all[0]) : fallback);
+  const avg = (nums: number[]) => (nums.length ? nums.reduce((a, b) => a + b, 0) / nums.length : null);
+
+  // A register narrowed to one business. Headers come from the full sheet (a filtered-empty
+  // list has none) and new rows get the business pre-filled so they don't vanish on add.
+  const areaTable = (sheet: string, all: SheetRow[], keep: (r: SheetRow) => boolean, priority: string[], defaults: Record<string, string>) =>
+    edt(sheet, all.filter(keep), priority, colsOf(all, priority), undefined, undefined, defaults);
+
+  type TaskLite = { title: string; status: string; owner: string; due: string; priority: string; blocked: boolean };
+  // One normalized task list per area, whether its tasks live in the shared Work sheet or a dedicated task sheet.
+  function areaTasks(viewId: string): TaskLite[] {
+    const fromWork: TaskLite[] = visibleWork.map(r => ({ title: r["Work Item / Next Action"] || "Untitled", status: r.Status || "", owner: r.Owner || "", due: r["Due Date"] || "", priority: r.Priority || "", blocked: r["Blocked?"] === "Yes" }));
+    const sheetRows = viewId === "gardenia" ? data.gardeniaTasks : viewId === "iron" ? data.ironTasks : [];
+    const fromSheet: TaskLite[] = sheetRows.map(r => ({ title: r.Task || "Untitled", status: r.Status || "", owner: r.Owner || "", due: r.Due || "", priority: r.Priority || "", blocked: false }));
+    return [...fromSheet, ...fromWork];
+  }
+  function taskStats(tasks: TaskLite[]) {
+    const done = tasks.filter(t => closed(t.status));
+    const open = tasks.filter(t => !closed(t.status));
+    const inProgress = open.filter(t => /progress|review|test/i.test(t.status));
+    const blocked = open.filter(t => t.blocked);
+    // Only trust due dates that carry a year ("Friday, 12 Sep" would parse as 2001 and flag everything overdue).
+    const overdue = open.filter(t => /\d{4}/.test(t.due) && Date.parse(t.due) < Date.now() - 86400000);
+    return { total: tasks.length, done, open, inProgress, blocked, overdue, pct: tasks.length ? Math.round((done.length / tasks.length) * 100) : 0 };
+  }
+
+  // Business-specific headline numbers, shared by the Summary and KPIs tabs.
+  function areaSpotlight(viewId: string, cfg: AreaPage): { label: string; value: string | number; detail: string; tone: string }[] {
+    if (viewId === "gardenia") {
+      const stageIdx = (r: SheetRow) => SALES_PIPELINE.findIndex(s => s.id === bucketFor(r.Stage, SALES_PIPELINE));
+      const reached = (id: string) => data.gardeniaPipeline.filter(r => stageIdx(r) >= SALES_PIPELINE.findIndex(s => s.id === id)).length;
+      return [
+        { label: "Accounts", value: data.gardeniaPipeline.length, detail: "In the sales pipeline", tone: "lav" },
+        { label: "Qualified", value: reached("qualified"), detail: "Qualified or further along", tone: "blue" },
+        { label: "Tastings", value: reached("tastingScheduled"), detail: `${reached("tastingCompleted")} completed`, tone: "sage" },
+        { label: "First orders", value: reached("firstOrderWon"), detail: `${reached("recurringWon")} recurring`, tone: "mint" },
+      ];
+    }
+    if (viewId === "store") {
+      const runs = data.checklistRuns.filter(r => cfg.business.test(r.Business || ""));
+      const completion = avg(runs.map(r => parseFloat(r["Completion %"])).filter(n => !Number.isNaN(n)));
+      const onTime = runs.filter(r => /yes/i.test(r["On Time?"] || "")).length;
+      const ratings = data.reviews.filter(r => cfg.business.test(r.Business || "")).map(r => parseFloat(r.Rating)).filter(n => !Number.isNaN(n));
+      const rating = avg(ratings);
+      return [
+        { label: "Checklist completion", value: completion === null ? "—" : `${Math.round(completion)}%`, detail: `${runs.length} runs · ${onTime} on time`, tone: "sage" },
+        { label: "Avg review rating", value: rating === null ? "—" : rating.toFixed(1), detail: `${ratings.length} reviews`, tone: "lav" },
+      ];
+    }
+    if (viewId === "finance") {
+      const open = data.financeReg.filter(r => !/closed|complete|paid|done|resolved/i.test(r.Status || ""));
+      return [
+        { label: "Register items", value: data.financeReg.length, detail: `${open.length} still open`, tone: "lav" },
+        { label: "Budget lines", value: data.budgets.length, detail: "Across all businesses", tone: "blue" },
+      ];
+    }
+    return [];
+  }
+
+  function areaSummaryTab(viewId: string, cfg: AreaPage) {
+    const s = taskStats(areaTasks(viewId));
+    const attention = [...s.blocked, ...s.overdue.filter(t => !s.blocked.includes(t)), ...s.open.filter(t => /p0/i.test(t.priority) && !s.blocked.includes(t) && !s.overdue.includes(t))].slice(0, 6);
+    const assigned = data.activity.filter(r => r["Action Type"] === "Task Assigned" && cfg.business.test(r["Business / Area"] || "")).sort(byTimestampDesc).slice(0, 5);
+    return (
+      <>
+        <section className="kpis">
+          <Kpi label="Open tasks" value={s.open.length} detail={`${s.total} total`} tone="sage" />
+          <Kpi label="In progress" value={s.inProgress.length} detail="Being worked on now" tone="blue" />
+          <Kpi label="Blocked" value={s.blocked.length} detail="Needs unblocking" tone="yellow" />
+          <Kpi label="Overdue" value={s.overdue.length} detail="Past their due date" tone="peach" />
+          <Kpi label="Completed" value={s.done.length} detail={`${s.pct}% of all tasks`} tone="mint" />
+          {areaSpotlight(viewId, cfg).map(k => <Kpi key={k.label} {...k} />)}
+        </section>
+        <section className="card" style={{ marginBottom: 16 }}>
+          <div className="list-toolbar">
+            <h2 className="section-title" style={{ margin: 0 }}>Progress</h2>
+            <button className="btn primary" onClick={() => openCapture(cfg.captureKey)}>＋ Assign a task</button>
+          </div>
+          <div className="progress" role="progressbar" aria-valuenow={s.pct} aria-valuemin={0} aria-valuemax={100} aria-label={`${s.pct}% of tasks complete`}><span style={{ width: `${s.pct}%` }} /></div>
+          <p className="sub" style={{ marginBottom: 0 }}>{s.done.length} of {s.total} tasks complete ({s.pct}%)</p>
+        </section>
+        <div className="dashboard-grid">
+          <section className="card">
+            <h2 className="section-title">Needs attention</h2>
+            {attention.map((t, i) => (
+              <div className="mini-row" key={i}><b>{t.title}</b><small>{[t.priority, t.owner, t.due].filter(Boolean).join(" · ") || "—"}</small></div>
+            ))}
+            {!attention.length && <p className="sub">Nothing blocked, overdue or P0 — clear.</p>}
+          </section>
+          <section className="card">
+            <h2 className="section-title">Recently completed</h2>
+            {s.done.slice(0, 6).map((t, i) => (
+              <div className="mini-row" key={i}><b>{t.title}</b><small>{t.owner || "—"}</small></div>
+            ))}
+            {!s.done.length && <p className="sub">Nothing completed yet — finished tasks will show up here.</p>}
+          </section>
+        </div>
+        <Section title="Recently assigned">
+          {assigned.length ? assigned.map((r, i) => (
+            <div className="mini-row" key={i}><b>{r.Detail || "—"}</b><small>{r.Timestamp ? new Date(r.Timestamp).toLocaleString() : ""}</small></div>
+          )) : <p className="sub">Tasks assigned to {cfg.label} from Capture / Inbox will show up here.</p>}
+        </Section>
+      </>
+    );
+  }
+
+  // A dedicated-sheet task board (Gardenia's Fire, Iron Marks): Board/List toggle over one sheet.
+  const sheetTaskBoard = (sheet: string, rows: SheetRow[], board: boolean, setBoard: (b: boolean) => void) => (
+    <section className="card">
+      <div className="list-toolbar">
+        <span className="sub">{rows.length} tasks</span>
+        <div className="chips">
+          <button className={`chip ${board ? "selected" : ""}`} onClick={() => setBoard(true)}>▤ Board</button>
+          <button className={`chip ${!board ? "selected" : ""}`} onClick={() => setBoard(false)}>☰ List</button>
+        </div>
+      </div>
+      {board ? (
+        <KanbanBoard
+          rows={rows}
+          pipeline={GARDENIA_PIPELINE}
+          onMove={(row, status) => updateAnyRow(sheet, row.ID, { Status: status }, `Moved to ${status}`)}
+          renderCard={row => (
+            <GenericKanbanCard row={row} sheetName={sheet} titleField="Task" subtitleFields={["Owner", "Due"]} pipeline={GARDENIA_PIPELINE} onUpdate={updateAnyRow} onDelete={deleteAnyRow} />
+          )}
+        />
+      ) : (
+        edt(sheet, rows, ["ID", "Task", "Description", "Priority", "Status", "Owner", "Due", "Notes"], undefined, GARDENIA_PIPELINE)
+      )}
+    </section>
+  );
+
+  function areaTasksTab(viewId: string, cfg: AreaPage) {
+    const dedicated = viewId === "gardenia"
+      ? { sheet: "HQ_GARDENIA_TASKS", rows: data.gardeniaTasks, board: gardeniaTasksBoardView, setBoard: setGardeniaTasksBoardView }
+      : viewId === "iron"
+        ? { sheet: "HQ_IRONMARK_TASKS", rows: data.ironTasks, board: ironTasksBoardView, setBoard: setIronTasksBoardView }
+        : null;
+    return (
+      <>
+        <div className="list-toolbar" style={{ marginBottom: 12 }}>
+          <span className="sub">Drag cards between columns to update their status.</span>
+          <button className="btn primary" onClick={() => openCapture(cfg.captureKey)}>＋ Assign a task</button>
+        </div>
+        {dedicated ? (
+          <>
+            <StatusSummary rows={dedicated.rows} pipeline={GARDENIA_PIPELINE} />
+            {sheetTaskBoard(dedicated.sheet, dedicated.rows, dedicated.board, dedicated.setBoard)}
+            {visibleWork.length > 0 && <Section title="Work desk items">{workItemsBoard(visibleWork)}</Section>}
+          </>
+        ) : (
+          <>
+            <StatusSummary rows={visibleWork} pipeline={WORK_PIPELINE} />
+            {workItemsBoard(visibleWork)}
+          </>
+        )}
+      </>
+    );
+  }
+
+  function gardeniaPipelineTab() {
+    return (
+      <>
+        <StatusSummary rows={data.gardeniaPipeline} pipeline={SALES_PIPELINE} statusField="Stage" />
+        <section className="card">
+          <div className="list-toolbar">
+            <span className="sub">{data.gardeniaPipeline.length} accounts</span>
+            <div className="chips">
+              <button className={`chip ${gardeniaPipelineBoardView ? "selected" : ""}`} onClick={() => setGardeniaPipelineBoardView(true)}>▤ Board</button>
+              <button className={`chip ${!gardeniaPipelineBoardView ? "selected" : ""}`} onClick={() => setGardeniaPipelineBoardView(false)}>☰ List</button>
+            </div>
+          </div>
+          {gardeniaPipelineBoardView ? (
+            <KanbanBoard
+              rows={data.gardeniaPipeline}
+              statusField="Stage"
+              pipeline={SALES_PIPELINE}
+              onMove={(row, stage) => updateAnyRow("HQ_GARDENIA_PIPELINE", row["Account / Prospect"], { Stage: stage }, `${row["Account / Prospect"]} moved to ${stage}`)}
+              renderCard={row => (
+                <GenericKanbanCard row={row} sheetName="HQ_GARDENIA_PIPELINE" titleField="Account / Prospect" subtitleFields={["Contact / Company", "Revenue / Value"]} pipeline={SALES_PIPELINE} statusField="Stage" onUpdate={updateAnyRow} onDelete={deleteAnyRow} />
+              )}
+            />
+          ) : (
+            edt("HQ_GARDENIA_PIPELINE", data.gardeniaPipeline, ["Account / Prospect", "Stage", "Contact / Company", "Revenue / Value", "Risk", "Next Follow-up", "Owner"], undefined, SALES_PIPELINE, "Stage")
+          )}
+        </section>
+      </>
+    );
+  }
+
+  function areaClosingTab(cfg: AreaPage) {
+    const wk = isoWeekKey();
+    const belongs = (r: SheetRow) => cfg.business.test(r.Business || "");
+    const runs = data.checklistRuns.filter(belongs);
+    const wraps = data.notes
+      .filter(n => n["Source Type"] === "WEEKLY CLOSE" && cfg.business.test(n["Business / Area"] || ""))
+      .sort(byTimestampDesc);
+    const saveWrapUp = async (note: string) => {
+      await addAnyRow("HQ_NOTES", {
+        Timestamp: new Date().toISOString(),
+        "Business / Area": cfg.label,
+        "Source Type": "WEEKLY CLOSE",
+        "Source ID": wk,
+        Note: note,
+        Author: session?.user?.name || "Ahmad",
+      }, `${wk} wrap-up saved for ${cfg.label}`);
+    };
+    return (
+      <>
+        <Section title="Checklists for this business">
+          {areaTable("HQ_CHECKLIST_RUNS", data.checklistRuns, belongs, ["Checklist Name", "Period Key", "Status", "Completion %", "On Time?", "Owner"], { Business: cfg.label })}
+          <p className="sub" style={{ marginBottom: 0 }}>{runs.length} run{runs.length === 1 ? "" : "s"} recorded. Use “Run Maintenance” in the sidebar to generate the missing daily/weekly checklists.</p>
+        </Section>
+        <Section title={`Weekly wrap-up · ${wk}`}>
+          <WeeklyWrapUpForm weekKey={wk} onSave={saveWrapUp} />
+        </Section>
+        <Section title="Past wrap-ups">
+          {wraps.length ? wraps.map(w => (
+            <article className="wrapup" key={w.Timestamp}>
+              <div className="list-toolbar" style={{ marginBottom: 4 }}>
+                <b>{w["Source ID"] || "Wrap-up"}</b>
+                <small>{w.Timestamp ? new Date(w.Timestamp).toLocaleString() : ""}{w.Author ? ` · ${w.Author}` : ""}</small>
+              </div>
+              <p style={{ whiteSpace: "pre-wrap", margin: "0 0 6px" }}>{w.Note}</p>
+              <AsyncButton className="link-button" style={{ color: "#ae493e" }} pendingLabel="Deleting…" onClick={async () => { if (confirm("Delete this wrap-up? This cannot be undone.")) await deleteAnyRow("HQ_NOTES", w.Timestamp); }}>Delete</AsyncButton>
+            </article>
+          )) : <p className="sub">No wrap-ups saved yet. Fill in the form above at the end of the week — each one is kept here as a record.</p>}
+        </Section>
+      </>
+    );
+  }
+
+  function areaKpiTab(viewId: string, cfg: AreaPage) {
+    const s = taskStats(areaTasks(viewId));
+    const spotlight = areaSpotlight(viewId, cfg);
+    return (
+      <>
+        <section className="kpis">
+          <Kpi label="Task completion" value={`${s.pct}%`} detail={`${s.done.length} of ${s.total} done`} tone="mint" />
+          <Kpi label="Open tasks" value={s.open.length} detail="Still to do" tone="sage" />
+          <Kpi label="Overdue" value={s.overdue.length} detail="Past their due date" tone="peach" />
+          {spotlight.map(k => <Kpi key={k.label} {...k} />)}
+        </section>
+        <Section title="Key Status Indicators">
+          {areaTable("HQ_KSI", data.ksi, r => cfg.business.test(r["Business / Area"] || ""), ["Metric / Indicator", "Current", "Status", "Threshold / Target", "Direction", "Owner", "Next Move"], { "Business / Area": cfg.label })}
+        </Section>
+        <Section title="Targets vs actual">
+          {areaTable("HQ_TARGETS", data.targets, r => cfg.business.test(r.Business || ""), ["Metric", "Target", "Actual", "Variance", "Variance %", "YoY %", "Owner"], { Business: cfg.label })}
+        </Section>
+      </>
+    );
+  }
+
+  function renderAreaTab(viewId: string, cfg: AreaPage, tab: string) {
+    const belongs = (r: SheetRow) => cfg.business.test(r.Business || "");
+    const defaults = { Business: cfg.label };
+    switch (tab) {
+      case "summary": return areaSummaryTab(viewId, cfg);
+      case "tasks": return areaTasksTab(viewId, cfg);
+      case "pipeline": return gardeniaPipelineTab();
+      case "closing": return areaClosingTab(cfg);
+      case "kpi": return areaKpiTab(viewId, cfg);
+      case "product": return <Section title="Product & Pricing">{edt("HQ_GARDENIA_PRODUCT", data.gardeniaProduct, ["Product / Test", "Test Status", "Unit Cost", "Price", "Target Margin", "Actual Margin", "Owner"])}</Section>;
+      case "register": return <Section title="Finance Register">{edt("HQ_FINANCE_REGISTER", data.financeReg, ["Register Type", "Entity / Property", "Account / Policy / Vendor / Tax", "Status", "Amount / Balance", "Due / Next Date", "Owner"])}</Section>;
+      case "budgets": return <Section title="Budgets">{edt("HQ_BUDGETS", data.budgets, ["Year", "Month", "Business", "Revenue Budget", "Net Profit Budget", "Owner"])}</Section>;
+      case "checklists": return (
+        <>
+          <Section title="Checklist Runs">{areaTable("HQ_CHECKLIST_RUNS", data.checklistRuns, belongs, ["Checklist Name", "Period Key", "Status", "Completion %", "On Time?", "Owner"], defaults)}</Section>
+          <Section title="Checklist Definitions">{areaTable("HQ_CHECKLIST_DEFS", data.checklistDefs, belongs, ["Checklist ID", "Area", "Checklist Name", "Cadence", "Active?"], defaults)}</Section>
+        </>
+      );
+      case "customers": return (
+        <>
+          <Section title="Customers">{areaTable("HQ_CUSTOMERS", data.customers, belongs, ["Date", "Customer", "Type", "Revenue", "Relationship Stage", "Next Action", "Owner"], defaults)}</Section>
+          {viewId === "gardenia"
+            ? <Section title="Follow-ups">{areaTable("HQ_CUSTOMER_FOLLOWUP", data.customerFollowup, belongs, ["Follow-up ID", "Customer / Recipient", "Priority", "Due", "Status", "Next Action", "Owner"], defaults)}</Section>
+            : <Section title="Reviews">{areaTable("HQ_REVIEWS", data.reviews, belongs, ["Date", "Platform", "Rating", "Theme", "Severity", "Response Status", "Owner"], defaults)}</Section>}
+          <Section title="Customer Issues">{areaTable("HQ_CUSTOMER_ISSUES", data.customerIssues, belongs, ["Date", "Issue Type", "Customer", "Severity", "Recovery / Action", "Status", "Owner"], defaults)}</Section>
+        </>
+      );
+      default: return null;
+    }
+  }
+
+  function renderAreaPage(viewId: string) {
+    const cfg = AREA_PAGES[viewId];
+    const tab = cfg.tabs.some(t => t.id === areaTab[viewId]) ? areaTab[viewId] : "summary";
+    return (
+      <>
+        <Header title={cfg.title} subtitle={cfg.subtitle} data={data} />
+        <div className="chips area-switcher">
+          {cfg.tabs.map(t => (
+            <button key={t.id} className={`chip ${tab === t.id ? "selected" : ""}`} onClick={() => setAreaTab(cur => ({ ...cur, [viewId]: t.id }))}>{t.label}</button>
+          ))}
+        </div>
+        {renderAreaTab(viewId, cfg, tab)}
+      </>
     );
   }
 
@@ -1243,104 +1634,10 @@ export default function HomePage() {
         </>
       );
 
-      case "gardenia": return (
-        <>
-          <Header title="Gardenia's Fire" subtitle="Pipeline, product and open work" data={data} />
-          <div className="chips area-switcher">
-            <button className={`chip ${gardeniaTab === "work" ? "selected" : ""}`} onClick={() => setGardeniaTab("work")}>Work Items</button>
-            <button className={`chip ${gardeniaTab === "tasks" ? "selected" : ""}`} onClick={() => setGardeniaTab("tasks")}>▤ Tasks</button>
-            <button className={`chip ${gardeniaTab === "pipeline" ? "selected" : ""}`} onClick={() => setGardeniaTab("pipeline")}>◆ Sales Pipeline</button>
-          </div>
-          {gardeniaTab === "work" && (
-            <>
-              <StatusSummary rows={visibleWork} pipeline={WORK_PIPELINE} />
-              {workItemsBoard(visibleWork)}
-              <Section title="Product & Pricing">{edt("HQ_GARDENIA_PRODUCT", data.gardeniaProduct, ["Product / Test", "Test Status", "Unit Cost", "Price", "Target Margin", "Actual Margin", "Owner"])}</Section>
-            </>
-          )}
-          {gardeniaTab === "tasks" && (
-            <>
-              <StatusSummary rows={data.gardeniaTasks} pipeline={GARDENIA_PIPELINE} />
-              <section className="card">
-              <div className="list-toolbar">
-                <span className="sub">{data.gardeniaTasks.length} tasks</span>
-                <div className="chips">
-                  <button className={`chip ${gardeniaTasksBoardView ? "selected" : ""}`} onClick={() => setGardeniaTasksBoardView(true)}>▤ Board</button>
-                  <button className={`chip ${!gardeniaTasksBoardView ? "selected" : ""}`} onClick={() => setGardeniaTasksBoardView(false)}>☰ List</button>
-                </div>
-              </div>
-              {gardeniaTasksBoardView ? (
-                <KanbanBoard
-                  rows={data.gardeniaTasks}
-                  pipeline={GARDENIA_PIPELINE}
-                  onMove={(row, status) => updateAnyRow("HQ_GARDENIA_TASKS", row.ID, { Status: status }, `Moved to ${status}`)}
-                  renderCard={row => (
-                    <GenericKanbanCard
-                      row={row}
-                      sheetName="HQ_GARDENIA_TASKS"
-                      titleField="Task"
-                      subtitleFields={["Owner", "Due"]}
-                      pipeline={GARDENIA_PIPELINE}
-                      onUpdate={updateAnyRow}
-                      onDelete={deleteAnyRow}
-                    />
-                  )}
-                />
-              ) : (
-                edt("HQ_GARDENIA_TASKS", data.gardeniaTasks, ["ID", "Task", "Description", "Priority", "Status", "Owner", "Due", "Notes"], undefined, GARDENIA_PIPELINE)
-              )}
-              </section>
-            </>
-          )}
-          {gardeniaTab === "pipeline" && (
-            <>
-              <StatusSummary rows={data.gardeniaPipeline} pipeline={SALES_PIPELINE} statusField="Stage" />
-              <section className="card">
-              <div className="list-toolbar">
-                <span className="sub">{data.gardeniaPipeline.length} accounts</span>
-                <div className="chips">
-                  <button className={`chip ${gardeniaPipelineBoardView ? "selected" : ""}`} onClick={() => setGardeniaPipelineBoardView(true)}>▤ Board</button>
-                  <button className={`chip ${!gardeniaPipelineBoardView ? "selected" : ""}`} onClick={() => setGardeniaPipelineBoardView(false)}>☰ List</button>
-                </div>
-              </div>
-              {gardeniaPipelineBoardView ? (
-                <KanbanBoard
-                  rows={data.gardeniaPipeline}
-                  statusField="Stage"
-                  pipeline={SALES_PIPELINE}
-                  onMove={(row, stage) => updateAnyRow("HQ_GARDENIA_PIPELINE", row["Account / Prospect"], { Stage: stage }, `${row["Account / Prospect"]} moved to ${stage}`)}
-                  renderCard={row => (
-                    <GenericKanbanCard
-                      row={row}
-                      sheetName="HQ_GARDENIA_PIPELINE"
-                      titleField="Account / Prospect"
-                      subtitleFields={["Contact / Company", "Revenue / Value"]}
-                      pipeline={SALES_PIPELINE}
-                      statusField="Stage"
-                      onUpdate={updateAnyRow}
-                      onDelete={deleteAnyRow}
-                    />
-                  )}
-                />
-              ) : (
-                edt("HQ_GARDENIA_PIPELINE", data.gardeniaPipeline, ["Account / Prospect", "Stage", "Contact / Company", "Revenue / Value", "Risk", "Next Follow-up", "Owner"], undefined, SALES_PIPELINE, "Stage")
-              )}
-              </section>
-            </>
-          )}
-        </>
-      );
-
-      case "finance": return (
-        <>
-          <Header title="Finance & Office" subtitle="Finance register, budgets and open work" data={data} />
-          <StatusSummary rows={visibleWork} pipeline={WORK_PIPELINE} />
-          {workItemsBoard(visibleWork)}
-          <Section title="Finance Register">{edt("HQ_FINANCE_REGISTER", data.financeReg, ["Register Type", "Entity / Property", "Account / Policy / Vendor / Tax", "Status", "Amount / Balance", "Due / Next Date", "Owner"])}</Section>
-          <Section title="Budgets">{edt("HQ_BUDGETS", data.budgets, ["Year", "Month", "Business", "Revenue Budget", "Net Profit Budget", "Owner"])}</Section>
-        </>
-      );
-
+      case "store":
+      case "gardenia":
+      case "finance":
+      case "iron": return renderAreaPage(view);
       case "property": return (
         <>
           <Header title="Buyahka / Property" subtitle="Property items, renewals and next actions" data={data} />
@@ -1367,61 +1664,6 @@ export default function HomePage() {
           <StatusSummary rows={visibleWork} pipeline={WORK_PIPELINE} />
           {workItemsBoard(visibleWork)}
           <Section title="Personal Register">{edt("HQ_PERSONAL_REGISTER", data.personalReg, ["Register Type", "Item / Account / Policy", "Status", "Amount", "Expected / Renewal / Due", "Owner", "Exception?"])}</Section>
-        </>
-      );
-
-      case "store": return (
-        <>
-          <Header title="Edible - Store" subtitle="Operations, checklists and open work" data={data} />
-          <StatusSummary rows={visibleWork} pipeline={WORK_PIPELINE} />
-          {workItemsBoard(visibleWork)}
-          <Section title="Checklist Runs">{edt("HQ_CHECKLIST_RUNS", data.checklistRuns.filter(r => /edible/i.test(r.Business || "")), ["Checklist Name", "Period Key", "Status", "Completion %", "On Time?", "Owner"])}</Section>
-        </>
-      );
-
-      case "iron": return (
-        <>
-          <Header title="Iron Marks" subtitle="Current records" data={data} />
-          <div className="chips area-switcher">
-            <button className={`chip ${ironTab === "work" ? "selected" : ""}`} onClick={() => setIronTab("work")}>Work Items</button>
-            <button className={`chip ${ironTab === "tasks" ? "selected" : ""}`} onClick={() => setIronTab("tasks")}>▤ Tasks</button>
-          </div>
-          {ironTab === "work" ? (
-            <Section title="Work Items">{visibleWork.length ? visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />) : <p className="sub">No work items for Iron Marks yet.</p>}</Section>
-          ) : (
-            <>
-              <StatusSummary rows={data.ironTasks} pipeline={GARDENIA_PIPELINE} />
-              <section className="card">
-                <div className="list-toolbar">
-                  <span className="sub">{data.ironTasks.length} tasks</span>
-                  <div className="chips">
-                    <button className={`chip ${ironTasksBoardView ? "selected" : ""}`} onClick={() => setIronTasksBoardView(true)}>▤ Board</button>
-                    <button className={`chip ${!ironTasksBoardView ? "selected" : ""}`} onClick={() => setIronTasksBoardView(false)}>☰ List</button>
-                  </div>
-                </div>
-                {ironTasksBoardView ? (
-                  <KanbanBoard
-                    rows={data.ironTasks}
-                    pipeline={GARDENIA_PIPELINE}
-                    onMove={(row, status) => updateAnyRow("HQ_IRONMARK_TASKS", row.ID, { Status: status }, `Moved to ${status}`)}
-                    renderCard={row => (
-                      <GenericKanbanCard
-                        row={row}
-                        sheetName="HQ_IRONMARK_TASKS"
-                        titleField="Task"
-                        subtitleFields={["Owner", "Due"]}
-                        pipeline={GARDENIA_PIPELINE}
-                        onUpdate={updateAnyRow}
-                        onDelete={deleteAnyRow}
-                      />
-                    )}
-                  />
-                ) : (
-                  edt("HQ_IRONMARK_TASKS", data.ironTasks, ["ID", "Task", "Description", "Priority", "Status", "Owner", "Due", "Notes"], undefined, GARDENIA_PIPELINE)
-                )}
-              </section>
-            </>
-          )}
         </>
       );
 
@@ -1471,7 +1713,7 @@ export default function HomePage() {
             <form className="card form-grid" onSubmit={assignTask}>
               <label className="full">Task description<textarea name="description" required placeholder="What needs to happen?" rows={3} /></label>
               <label>Area
-                <select name="area" required defaultValue="">
+                <select name="area" required key={captureArea} defaultValue={captureArea}>
                   <option value="" disabled>Choose an area…</option>
                   {Object.entries(CAPTURE_ROUTES).map(([key, route]) => <option key={key} value={key}>{route.label}</option>)}
                 </select>

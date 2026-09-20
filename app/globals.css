@@ -25,3 +25,13 @@
 .btn:disabled,.link-button:disabled{opacity:.6;cursor:progress}
 .btn.is-pending,.link-button.is-pending{cursor:progress}
 @media (prefers-reduced-motion:reduce){.busy-bar.on,.spinner,.toast{animation-duration:0s}.spinner{border-right-color:currentColor}}
+
+/* ── Area pages: summary lists, progress bar, weekly wrap-ups ── */
+.mini-row{display:flex;justify-content:space-between;align-items:baseline;gap:12px;padding:8px 0;border-bottom:1px solid var(--line)}
+.mini-row:last-child{border-bottom:0}
+.mini-row b{font-size:13px}
+.mini-row small{color:var(--muted);text-align:right}
+.progress{height:10px;background:var(--line);border-radius:99px;overflow:hidden;margin:10px 0 6px}
+.progress>span{display:block;height:100%;background:var(--good);border-radius:99px;transition:width .3s}
+.wrapup{padding:12px 0;border-bottom:1px solid var(--line)}
+.wrapup:last-child{border-bottom:0}
