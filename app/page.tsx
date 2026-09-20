@@ -6,6 +6,7 @@ import type { HqBootstrap, SheetRow } from "@/lib/hq-types";
 import { functions } from "@/lib/hq-types";
 import { areaProgress, overallProgress, pipelineCounts, weeklyActivity } from "@/lib/hq-progress";
 import { ProgressPanel } from "./charts";
+import { AppShell, type NavSection } from "./shell";
 
 type View =
   | "home" | "work" | "operate" | "manage" | "close" | "intel"
@@ -1830,56 +1831,45 @@ export default function HomePage() {
     }
   };
 
+  const quickNav: [View, string, string][] = [
+    ["add", "Capture / Inbox", "＋"], ["customers", "Customers", "⌕"], ["decisions", "Decisions", "◆"], ["newSheet", "New Register", "▦"],
+  ];
+  const navSections: NavSection[] = [
+    { label: "MAIN", items: mainNav.map(([id, label, icon]) => ({ id, label, icon, active: view === id, onSelect: () => nav(id) })) },
+    { label: "QUICK", items: quickNav.map(([id, label, icon]) => ({ id, label, icon, active: view === id, onSelect: () => nav(id) })) },
+    ...(data.customSheetDefs.length > 0 ? [{
+      label: "YOUR REGISTERS",
+      items: data.customSheetDefs.map(d => ({
+        id: d.name, label: d.label, icon: "▤",
+        active: view === "custom" && selectedCustomSheet === d.name,
+        onSelect: () => { setSelectedCustomSheet(d.name); nav("custom"); },
+      })),
+    }] : []),
+  ];
+  const currentTitle = navSections.flatMap(s => s.items).find(i => i.active)?.label ?? "Ahmad HQ";
+
   return (
-    <main className="system-shell">
-      <aside>
-        <div className="brand-mark">AHMAD HQ<small>Management System</small></div>
-        <div className="motto">Plan · Execute · Monitor<br />Close · Improve</div>
-        <div className="nav-label">MAIN</div>
-        <nav>
-          {mainNav.map(([id, label, icon]) => (
-            <button className={view === id ? "active" : ""} key={id} onClick={() => nav(id)}>
-              <span>{icon}</span>{label}
-            </button>
-          ))}
-        </nav>
-        <div className="nav-label">QUICK</div>
-        <nav>
-          <button onClick={() => nav("add")}><span>＋</span>Capture / Inbox</button>
-          <button onClick={() => nav("customers")}><span>⌕</span>Customers</button>
-          <button onClick={() => nav("decisions")}><span>◆</span>Decisions</button>
-          <button onClick={() => nav("newSheet")}><span>▦</span>New Register</button>
-        </nav>
-        {data.customSheetDefs.length > 0 && (
-          <>
-            <div className="nav-label">YOUR REGISTERS</div>
-            <nav>
-              {data.customSheetDefs.map(d => (
-                <button
-                  className={view === "custom" && selectedCustomSheet === d.name ? "active" : ""}
-                  key={d.name}
-                  onClick={() => { setSelectedCustomSheet(d.name); nav("custom"); }}
-                >
-                  <span>▤</span>{d.label}
-                </button>
-              ))}
-            </nav>
-          </>
-        )}
+    <AppShell
+      sections={navSections}
+      title={currentTitle}
+      footer={closeMenu => (
         <div className="user-panel">
           <b>{session?.user?.name || "Loading..."}</b>
           <small>{session?.user?.role || "Unknown Role"}</small>
           <AsyncButton className="link-button" pendingLabel="Running…" onClick={runMaintenance} style={{ marginTop: 8, padding: 0 }}>Run Maintenance</AsyncButton>
-          <button className="link-button" onClick={() => setShowGuide(true)} style={{ marginTop: 8, padding: 0, marginLeft: 12 }}>? Guide</button>
+          <button className="link-button" onClick={() => { setShowGuide(true); closeMenu(); }} style={{ marginTop: 8, padding: 0, marginLeft: 12 }}>? Guide</button>
           <button className="link-button" onClick={() => signOut()} style={{ marginTop: 8, padding: 0, marginLeft: 12 }}>Sign Out</button>
         </div>
-      </aside>
-      <main className="main-content">
-        {renderView()}
-      </main>
-      {showGuide && <GuideTour onClose={dismissGuide} />}
-      <FeedbackHost />
-    </main>
+      )}
+      overlays={(
+        <>
+          {showGuide && <GuideTour onClose={dismissGuide} />}
+          <FeedbackHost />
+        </>
+      )}
+    >
+      {renderView()}
+    </AppShell>
   );
 }
 

@@ -88,6 +88,22 @@
 .viz-table table{border-collapse:collapse;font-size:12px;margin-top:6px;width:100%}
 .viz-table th,.viz-table td{border-bottom:1px solid var(--line);padding:4px 8px;text-align:left}
 .viz-table thead th{color:var(--viz-ink-2);font-size:11px}
+/* ── Phone navigation: top bar + slide-in drawer (hidden on desktop, where the sidebar shows) ── */
+.mobile-bar,.drawer-backdrop,aside.drawer{display:none}
+.drawer-close{background:rgba(255,255,255,.1);border:0;border-radius:9px;color:#fff;cursor:pointer;font-size:24px;height:40px;line-height:1;position:absolute;right:10px;top:10px;width:40px}
+@media(max-width:800px){
+  .mobile-bar{align-items:center;background:linear-gradient(180deg,var(--navy),#102e49);color:#fff;display:flex;gap:10px;padding:8px 12px;position:sticky;top:0;z-index:30}
+  .menu-btn{align-items:center;background:rgba(255,255,255,.1);border:0;border-radius:9px;color:#fff;cursor:pointer;display:inline-flex;height:44px;justify-content:center;width:44px}
+  .mobile-brand{font:700 17px Georgia,serif;letter-spacing:.3px;white-space:nowrap}
+  .mobile-title{font-size:13px;margin-left:auto;max-width:48%;opacity:.9;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .system-shell aside.drawer{bottom:0;box-shadow:6px 0 24px rgba(10,25,40,.35);display:block;height:auto;left:0;max-width:86vw;padding-top:58px;position:fixed;top:0;transform:translateX(-100%);transition:transform .22s ease,visibility 0s .22s;visibility:hidden;width:300px;z-index:50}
+  .system-shell aside.drawer.open{transform:none;transition:transform .22s ease;visibility:visible}
+  .drawer-backdrop{background:rgba(10,25,40,.5);display:block;inset:0;opacity:0;position:fixed;transition:opacity .2s,visibility 0s .2s;visibility:hidden;z-index:40}
+  .drawer-backdrop.open{opacity:1;transition:opacity .2s;visibility:visible}
+  .drawer nav button{padding:12px 10px}
+  .drawer .user-panel .link-button{font-size:13px;padding:6px 0}
+}
+@media(prefers-reduced-motion:reduce){.system-shell aside.drawer,.drawer-backdrop{transition:none}}
 @media(max-width:1000px){.viz-hero,.viz-wide,.viz-half{grid-column:span 6}}
 @media(max-width:560px){.viz-row{grid-template-columns:96px 1fr}.viz-row-value{grid-column:1/-1;padding-left:106px;margin-top:-4px}.viz-row-bar{grid-template-columns:96px 1fr}}
 @media(prefers-reduced-motion:reduce){.viz-meter>span{transition:none}}
