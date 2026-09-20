@@ -31,6 +31,7 @@ export function getAuthUrl(): string {
 }
 
 export async function saveTokens(tokens: OAuthTokens): Promise<void> {
+  cachedClient = null; // new credentials (e.g. a fresh sign-in) must not be shadowed by the old cached client
   try {
     await fs.writeFile(TOKENS_PATH, JSON.stringify(tokens, null, 2), "utf-8");
   } catch (error) {
@@ -59,7 +60,13 @@ export async function loadTokens(): Promise<OAuthTokens | null> {
   }
 }
 
-export async function getValidClient() {
+// Reuse one authorised client until its access token is about to expire. With the refresh
+// token coming from an env var (Vercel), there is no stored access token, so without this
+// every single Sheets call would first make its own token-refresh round trip.
+let cachedClient: { client: ReturnType<typeof getOAuthClient>; expiry: number } | null = null;
+let clientInFlight: Promise<ReturnType<typeof getOAuthClient>> | null = null;
+
+async function buildClient() {
   const client = getOAuthClient();
   const tokens = await loadTokens();
   if (!tokens?.refresh_token) {
@@ -68,14 +75,23 @@ export async function getValidClient() {
   client.setCredentials(tokens);
 
   // If the access token is missing or about to expire in under 60 seconds, refresh it.
-  const expiresIn = (tokens.expiry_date ?? 0) - Date.now();
-  if (!tokens.access_token || expiresIn < 60_000) {
+  let expiry = tokens.expiry_date ?? 0;
+  if (!tokens.access_token || expiry - Date.now() < 60_000) {
     const { credentials } = await client.refreshAccessToken();
-    await saveTokens({ ...tokens, ...credentials });
+    await saveTokens({ ...tokens, ...credentials }); // also clears cachedClient; it is set again just below
     client.setCredentials(credentials);
+    expiry = credentials.expiry_date ?? 0;
   }
 
+  cachedClient = { client, expiry };
   return client;
+}
+
+export function getValidClient() {
+  if (cachedClient && cachedClient.expiry - Date.now() > 60_000) return Promise.resolve(cachedClient.client);
+  // Concurrent callers share one refresh instead of each starting their own.
+  clientInFlight ??= buildClient().finally(() => { clientInFlight = null; });
+  return clientInFlight;
 }
 
 export function hasOAuthConfig(): boolean {

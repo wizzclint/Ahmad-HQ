@@ -59,6 +59,64 @@ export async function readSheet(sheetName: string, headerRow: number, width: str
   return rowsFromValues((response.data.values ?? []) as string[][]);
 }
 
+// ── Read-quota protection ────────────────────────────────────────────────
+// Google allows ~60 read requests per minute per user. A page load used to make ~35
+// (one per tab), so two quick reloads hit the limit. Now: one metadata request (cached),
+// one batched read for every tab, and a short in-memory cache in front of that.
+
+/** Tab title -> numeric sheetId, cached briefly. Doubles as the list of tabs that exist. */
+let sheetIndex: { at: number; gids: Map<string, number> } | null = null;
+const SHEET_INDEX_TTL_MS = 60_000;
+
+async function sheetGids(sheets: Awaited<ReturnType<typeof getSheets>>, force = false): Promise<Map<string, number>> {
+  if (!force && sheetIndex && Date.now() - sheetIndex.at < SHEET_INDEX_TTL_MS) return sheetIndex.gids;
+  const meta = await sheets.spreadsheets.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, fields: "sheets.properties(sheetId,title)" });
+  const gids = new Map<string, number>();
+  for (const s of meta.data.sheets ?? []) {
+    if (s.properties?.title != null && s.properties.sheetId != null) gids.set(s.properties.title, s.properties.sheetId);
+  }
+  sheetIndex = { at: Date.now(), gids };
+  return gids;
+}
+
+type ReadSpec = { name: string; headerRow: number; width: string; required?: boolean };
+
+/**
+ * Read many tabs in a single batchGet. Tabs that don't exist come back empty (matching the old
+ * per-tab `.catch(() => [])`), so one missing tab can't fail the whole request — unless the
+ * spec is `required`, which keeps the old behaviour of failing loudly (e.g. a mistyped
+ * GOOGLE_WORK_SHEET).
+ */
+async function readMany(specs: ReadSpec[]): Promise<SheetRow[][]> {
+  const sheets = await getSheets();
+  const gids = await sheetGids(sheets);
+  const missing = specs.find((s) => s.required && !gids.has(s.name));
+  if (missing) throw new Error(`Sheet not found: ${missing.name}`);
+
+  const present = specs.filter((s) => gids.has(s.name));
+  const res = present.length
+    ? await sheets.spreadsheets.values.batchGet({
+        spreadsheetId: process.env.GOOGLE_SHEETS_ID,
+        ranges: present.map((s) => `'${s.name.replace(/'/g, "''")}'!A${s.headerRow}:${s.width}`),
+      })
+    : null;
+  const byName = new Map(present.map((s, i) => [s.name, rowsFromValues((res?.data.valueRanges?.[i]?.values ?? []) as string[][])]));
+  return specs.map((s) => byName.get(s.name) ?? []);
+}
+
+/** Whole-workspace snapshot cache. Writes call invalidateBootstrapCache() so you always see your own changes. */
+const BOOTSTRAP_TTL_MS = 15_000;
+const BOOTSTRAP_STALE_OK_MS = 10 * 60_000; // if Google errors, serve data up to this old rather than a broken page
+let bootstrapCache: { at: number; data: HqBootstrap } | null = null;
+let bootstrapInFlight: Promise<HqBootstrap> | null = null;
+let cacheGeneration = 0;
+
+export function invalidateBootstrapCache() {
+  cacheGeneration++;
+  bootstrapCache = null;
+  bootstrapInFlight = null;
+}
+
 /**
  * The server is the sole authority for work item IDs — never trust a
  * client-supplied ID. Reads the current sheet, finds the highest existing
@@ -81,6 +139,7 @@ export async function addWork(item: SheetRow) {
   if (await isDemoData()) return { ok: true, source: "demo" as const, id: `W-${Date.now()}` };
   const id = await nextWorkId();
   await (await getSheets()).spreadsheets.values.append({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE"}!A:U`, valueInputOption: "USER_ENTERED", requestBody: { values: [[id, item["Project / Function"], item["Work Item / Next Action"], item.Owner, "Action", item.Priority || "PUSH", "No", "Yes", item["Due Date"], "Open", "", "No", "", "", new Date().toISOString(), new Date().toISOString(), "No", "", "", "", "0d"]] } });
+  invalidateBootstrapCache();
   return { ok: true, source: "sheets" as const, id };
 }
 
@@ -94,15 +153,16 @@ async function updateRow(sheetName: string, headerRow: number, width: string, id
   const row = [...(values?.[rowIndex] ?? [])];
   Object.entries(changes).forEach(([header, value]) => { const column = headers.indexOf(header); if (column >= 0) row[column] = value; });
   await sheets.spreadsheets.values.update({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${sheetName}!A${headerRow + rowIndex}:${width}${headerRow + rowIndex}`, valueInputOption: "USER_ENTERED", requestBody: { values: [row] } });
+  invalidateBootstrapCache();
   return { ok: true, source: "sheets" as const, id };
 }
 
 /** Find the numeric sheetId (gid) Google's batchUpdate API needs for a tab, by its name. */
 async function getSheetGid(sheets: Awaited<ReturnType<typeof getSheets>>, sheetName: string): Promise<number> {
-  const meta = await sheets.spreadsheets.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID });
-  const sheet = meta.data.sheets?.find((s) => s.properties?.title === sheetName);
-  if (sheet?.properties?.sheetId == null) throw new Error(`Sheet not found: ${sheetName}`);
-  return sheet.properties.sheetId;
+  // Cached index first; if the tab isn't in it (just created?), refresh once before giving up.
+  const gid = (await sheetGids(sheets)).get(sheetName) ?? (await sheetGids(sheets, true)).get(sheetName);
+  if (gid == null) throw new Error(`Sheet not found: ${sheetName}`);
+  return gid;
 }
 
 /** Delete the row whose first column matches `id`. `headerRow` is where the header row lives (1-indexed). */
@@ -118,6 +178,7 @@ async function deleteRow(sheetName: string, headerRow: number, id: string) {
     spreadsheetId: process.env.GOOGLE_SHEETS_ID,
     requestBody: { requests: [{ deleteDimension: { range: { sheetId: gid, dimension: "ROWS", startIndex: absoluteRow0Indexed, endIndex: absoluteRow0Indexed + 1 } } }] },
   });
+  invalidateBootstrapCache();
   return { ok: true, source: "sheets" as const, id };
 }
 
@@ -180,9 +241,7 @@ async function ensureCustomSheetsRegistry(sheets: Awaited<ReturnType<typeof getS
   });
 }
 
-export async function listCustomSheets(): Promise<CustomSheetDef[]> {
-  if (await isDemoData()) return [];
-  const rows = await readSheet(CUSTOM_SHEETS_REGISTRY, 1, "Z").catch(() => []);
+function customDefsFromRows(rows: SheetRow[]): CustomSheetDef[] {
   return rows
     .filter((r) => r["Sheet Name"])
     .map((r) => ({
@@ -190,6 +249,12 @@ export async function listCustomSheets(): Promise<CustomSheetDef[]> {
       label: r.Label || r["Sheet Name"],
       columns: (r.Columns || "").split(",").map((c) => c.trim()).filter(Boolean),
     }));
+}
+
+export async function listCustomSheets(): Promise<CustomSheetDef[]> {
+  if (await isDemoData()) return [];
+  const rows = await readSheet(CUSTOM_SHEETS_REGISTRY, 1, "Z").catch(() => []);
+  return customDefsFromRows(rows);
 }
 
 export async function isRegisteredCustomSheet(sheetName: string): Promise<boolean> {
@@ -247,6 +312,8 @@ export async function createCustomSheet(label: string, columns: string[], create
     requestBody: { values: [[name, cleanLabel, cleanColumns.join(", "), createdBy, new Date().toISOString()]] },
   });
 
+  sheetIndex = null; // a new tab now exists
+  invalidateBootstrapCache();
   return { ok: true, source: "sheets" as const, name, label: cleanLabel, columns: cleanColumns };
 }
 
@@ -258,6 +325,7 @@ export async function appendAnyRow(sheetName: string, obj: Record<string, string
   const headers = (headResp.data.values?.[0] ?? []) as string[];
   const row = headers.map(h => obj[h] ?? "");
   await sheets.spreadsheets.values.append({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${sheetName}!A:Z`, valueInputOption: "USER_ENTERED", requestBody: { values: [row] } });
+  invalidateBootstrapCache();
   return { ok: true, source: "sheets" as const };
 }
 
@@ -288,6 +356,7 @@ export async function updateRowByColumn(sheetName: string, idHeaderRow: number, 
     spreadsheetId: process.env.GOOGLE_SHEETS_ID, range, valueInputOption: "USER_ENTERED", requestBody: { values: [newRow] }
   });
 
+  invalidateBootstrapCache();
   return { ok: true, source: "sheets" as const, row: newRow };
 }
 
@@ -396,6 +465,78 @@ function filterBootstrapForUser(raw: HqBootstrap, user: HqUser): HqBootstrap {
   };
 }
 
+// HqBootstrap fields that are a plain tab read (header in row 1, columns A:Z). Keeping the list
+// in one place means the batched read and the assembled object can't drift apart.
+const STANDARD_SHEETS: [keyof HqBootstrap, string][] = [
+  ["targets", "HQ_TARGETS"], ["budgets", "HQ_BUDGETS"], ["customers", "HQ_CUSTOMERS"],
+  ["customerIssues", "HQ_CUSTOMER_ISSUES"], ["customerFollowup", "HQ_CUSTOMER_FOLLOWUP"],
+  ["reviews", "HQ_REVIEWS"], ["decisions", "HQ_DECISIONS"], ["exceptions", "HQ_EXCEPTIONS"],
+  ["plans", "HQ_PLANS"], ["people", "HQ_PEOPLE"], ["ksi", "HQ_KSI"],
+  ["gardeniaPipeline", "HQ_GARDENIA_PIPELINE"], ["gardeniaProduct", "HQ_GARDENIA_PRODUCT"], ["gardeniaTasks", "HQ_GARDENIA_TASKS"],
+  ["checklistDefs", "HQ_CHECKLIST_DEFS"], ["checklistRuns", "HQ_CHECKLIST_RUNS"],
+  ["alerts", "HQ_ALERTS"], ["property", "HQ_PROPERTY"], ["financeReg", "HQ_FINANCE_REGISTER"], ["personalReg", "HQ_PERSONAL_REGISTER"],
+  ["requests", "HQ_REQUESTS"], ["training", "HQ_TRAINING"], ["systemAccess", "HQ_SYSTEM_ACCESS"], ["periods", "HQ_PERIODS"],
+  ["notes", "HQ_NOTES"], ["activity", "HQ_ACTIVITY"],
+  ["firefliesLegacy", "HQ_FIREFLIES_LEGACY"], ["ironTasks", "HQ_IRONMARK_TASKS"],
+];
+
+/** Reads the whole workspace from Google Sheets in a couple of requests (see readMany). */
+async function fetchSnapshot(): Promise<HqBootstrap> {
+  const workSheet = process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE";
+  const closeSheet = process.env.GOOGLE_CLOSE_SHEET ?? "WEEK CLOSE — UPDATE";
+  const results = await readMany([
+    { name: workSheet, headerRow: 5, width: "U", required: true },
+    { name: closeSheet, headerRow: 1, width: "J", required: true },
+    ...STANDARD_SHEETS.map(([, name]) => ({ name, headerRow: 1, width: "Z" })),
+    { name: CUSTOM_SHEETS_REGISTRY, headerRow: 1, width: "Z" },
+  ]);
+  const [work, controls] = results;
+  const tabs = Object.fromEntries(STANDARD_SHEETS.map(([key], i) => [key, results[2 + i]]));
+  const customSheetDefs = customDefsFromRows(results[2 + STANDARD_SHEETS.length]);
+
+  // Dynamically-created sheets aren't known at compile time, so their data
+  // lives in a lookup keyed by sheet name instead of a fixed HqBootstrap field.
+  const customRows = customSheetDefs.length
+    ? await readMany(customSheetDefs.map((d) => ({ name: d.name, headerRow: 1, width: "Z" })))
+    : [];
+  const customSheets: Record<string, SheetRow[]> = Object.fromEntries(customSheetDefs.map((d, i) => [d.name, customRows[i]]));
+
+  return { work, controls, user: "", generatedAt: new Date().toISOString(), source: "sheets", ...tabs, customSheetDefs, customSheets } as unknown as HqBootstrap;
+}
+
+/**
+ * The workspace snapshot: served from a 15s in-memory cache, with concurrent requests sharing one
+ * read. If Google errors (e.g. the read quota), the last good snapshot is served for up to 10 minutes
+ * instead of a broken page; its generatedAt still says how old it is.
+ */
+async function loadSnapshot(): Promise<HqBootstrap> {
+  if (bootstrapCache && Date.now() - bootstrapCache.at < BOOTSTRAP_TTL_MS) return bootstrapCache.data;
+
+  if (!bootstrapInFlight) {
+    const generation = cacheGeneration;
+    const promise: Promise<HqBootstrap> = fetchSnapshot()
+      .then((data) => {
+        // A write that landed mid-read makes this data possibly pre-write: return it, but don't cache it.
+        if (generation === cacheGeneration) bootstrapCache = { at: Date.now(), data };
+        return data;
+      })
+      .finally(() => {
+        if (bootstrapInFlight === promise) bootstrapInFlight = null;
+      });
+    bootstrapInFlight = promise;
+  }
+
+  try {
+    return await bootstrapInFlight;
+  } catch (error) {
+    if (bootstrapCache && Date.now() - bootstrapCache.at < BOOTSTRAP_STALE_OK_MS) {
+      console.warn("Google Sheets read failed; serving the last good snapshot instead.", error);
+      return bootstrapCache.data;
+    }
+    throw error;
+  }
+}
+
 export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
   if (await isDemoData()) {
     return {
@@ -412,52 +553,8 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
     };
   }
 
-  const s = (name: string) => readSheet(name, 1, "Z").catch(() => EMPTY);
-  const [
-    work, controls,
-    targets, budgets, customers, customerIssues, customerFollowup,
-    reviews, decisions, exceptions, plans, people, ksi,
-    gardeniaPipeline, gardeniaProduct, gardeniaTasks, checklistDefs, checklistRuns,
-    alerts, property, financeReg, personalReg,
-    requests, training, systemAccess, periods, notes, activity,
-    firefliesLegacy, ironTasks, customSheetDefs,
-  ] = await Promise.all([
-    readSheet(process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE", 5, "U"),
-    readSheet(process.env.GOOGLE_CLOSE_SHEET ?? "WEEK CLOSE — UPDATE", 1, "J"),
-    s("HQ_TARGETS"), s("HQ_BUDGETS"), s("HQ_CUSTOMERS"),
-    s("HQ_CUSTOMER_ISSUES"), s("HQ_CUSTOMER_FOLLOWUP"),
-    s("HQ_REVIEWS"), s("HQ_DECISIONS"), s("HQ_EXCEPTIONS"),
-    s("HQ_PLANS"), s("HQ_PEOPLE"), s("HQ_KSI"),
-    s("HQ_GARDENIA_PIPELINE"), s("HQ_GARDENIA_PRODUCT"), s("HQ_GARDENIA_TASKS"),
-    s("HQ_CHECKLIST_DEFS"), s("HQ_CHECKLIST_RUNS"),
-    s("HQ_ALERTS"),
-    s("HQ_PROPERTY"), s("HQ_FINANCE_REGISTER"),
-    s("HQ_PERSONAL_REGISTER"),
-    s("HQ_REQUESTS"), s("HQ_TRAINING"),
-    s("HQ_SYSTEM_ACCESS"), s("HQ_PERIODS"),
-    s("HQ_NOTES"), s("HQ_ACTIVITY"),
-    s("HQ_FIREFLIES_LEGACY"), s("HQ_IRONMARK_TASKS"), listCustomSheets().catch(() => []),
-  ]);
-
-  // Dynamically-created sheets aren't known at compile time, so their data
-  // lives in a lookup keyed by sheet name instead of a fixed HqBootstrap field.
-  const customSheets: Record<string, SheetRow[]> = {};
-  await Promise.all(customSheetDefs.map(async (def) => {
-    customSheets[def.name] = await readSheet(def.name, 1, "Z").catch(() => EMPTY);
-  }));
-
-  const raw: HqBootstrap = {
-    work, controls,
-    user: user ? user.name : (process.env.GOOGLE_USER_EMAIL ?? "Sheets workspace"),
-    generatedAt: new Date().toISOString(), source: "sheets",
-    targets, budgets, customers, customerIssues, customerFollowup,
-    reviews, decisions, exceptions, plans, people, ksi,
-    gardeniaPipeline, gardeniaProduct, gardeniaTasks, checklistDefs, checklistRuns,
-    alerts, property, financeReg, personalReg,
-    requests, training, systemAccess, periods, notes, activity,
-    firefliesLegacy, ironTasks, customSheetDefs, customSheets,
-  };
-
+  const snapshot = await loadSnapshot();
+  const raw: HqBootstrap = { ...snapshot, user: user ? user.name : (process.env.GOOGLE_USER_EMAIL ?? "Sheets workspace") };
   return user ? filterBootstrapForUser(raw, user) : raw;
 }
 
