@@ -4,6 +4,8 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
 import type { HqBootstrap, SheetRow } from "@/lib/hq-types";
 import { functions } from "@/lib/hq-types";
+import { areaProgress, overallProgress, pipelineCounts, weeklyActivity } from "@/lib/hq-progress";
+import { ProgressPanel } from "./charts";
 
 type View =
   | "home" | "work" | "operate" | "manage" | "close" | "intel"
@@ -194,6 +196,13 @@ const CAPTURE_ROUTES: Record<string, CaptureRoute> = {
   property: { label: "Property", kind: "work" },
   people: { label: "People & Systems", kind: "work" },
   personal: { label: "Personal / Ahmad", kind: "work" },
+};
+
+// Task sheets whose rows carry no completion date: moving a task to Done on one of these is logged to HQ_ACTIVITY.
+const TASK_SHEET_AREAS: Record<string, string> = {
+  HQ_GARDENIA_TASKS: "Gardenia's Fire",
+  HQ_IRONMARK_TASKS: "Iron Marks",
+  HQ_FIREFLIES_LEGACY: "Fireflies & Legacy",
 };
 
 // ── Area pages ───────────────────────────────────────────────────────────
@@ -815,6 +824,8 @@ function Home({ data, onSave, onDelete }: { data: HqBootstrap; onSave: (u: Sheet
   const critical = open.filter(r => r["Critical Move?"] === "Yes");
   const escalated = open.filter(r => r["Management Escalation?"] === "Yes");
   const openAlerts = data.alerts.filter(r => !/resolved|closed/i.test(r.Status || ""));
+  const progressAreas = areaProgress(data);
+  const overall = overallProgress(progressAreas);
   const recentlyCompleted = [
     ...data.work.filter(r => closed(r.Status)).map(r => ({ area: r["Project / Function"] || "—", task: r["Work Item / Next Action"] || "—", when: r["COMPLETED AT"] || r["Last Update"] || "" })),
     ...data.gardeniaTasks.filter(r => closed(r.Status)).map(r => ({ area: "Gardenia's Fire", task: r.Task || "—", when: "" })),
@@ -832,6 +843,7 @@ function Home({ data, onSave, onDelete }: { data: HqBootstrap; onSave: (u: Sheet
         <Kpi label="Open alerts" value={openAlerts.length} detail="Active system alerts" tone="peach" />
         <Kpi label="Exceptions" value={data.exceptions.filter(r => !/closed/i.test(r.Status || "")).length} detail="Open exceptions" tone="mint" />
       </section>
+      <ProgressPanel overall={overall} areas={progressAreas} funnel={pipelineCounts(data.gardeniaPipeline)} weekly={weeklyActivity(data)} />
       <div className="dashboard-grid">
         <section className="card">
           <h2 className="section-title">Critical moves</h2>
@@ -873,17 +885,18 @@ function Home({ data, onSave, onDelete }: { data: HqBootstrap; onSave: (u: Sheet
       <Section title="Recent Activity">
         {(() => {
           const recent = [...data.activity]
-            .filter(r => r["Action Type"] === "Task Assigned")
+            .filter(r => r["Action Type"] === "Task Assigned" || r["Action Type"] === "Task Completed")
             .sort((a, b) => new Date(b.Timestamp || 0).getTime() - new Date(a.Timestamp || 0).getTime())
             .slice(0, 8);
-          if (!recent.length) return <p className="sub">No activity recorded yet — captured tasks and changes will show up here.</p>;
+          if (!recent.length) return <p className="sub">No activity recorded yet — assigned and completed tasks will show up here.</p>;
           return (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
-                <thead><tr>{["Timestamp", "Business / Area", "Detail"].map(h => <th key={h} style={{ padding: "6px 10px", background: "#173B5B", color: "#fff", textAlign: "left" }}>{h}</th>)}</tr></thead>
+                <thead><tr>{["Timestamp", "Event", "Business / Area", "Detail"].map(h => <th key={h} style={{ padding: "6px 10px", background: "#173B5B", color: "#fff", textAlign: "left" }}>{h}</th>)}</tr></thead>
                 <tbody>{recent.map((r, i) => (
                   <tr key={i} style={{ background: i % 2 ? "#f8f9fb" : "#fff", borderBottom: "1px solid #e8eaf0" }}>
                     <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r.Timestamp ? new Date(r.Timestamp).toLocaleString() : "—"}</td>
+                    <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r["Action Type"] === "Task Completed" ? "Completed" : "Assigned"}</td>
                     <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r["Business / Area"] || "—"}</td>
                     <td style={{ padding: "6px 10px" }}>{r.Detail || "—"}</td>
                   </tr>
@@ -1032,6 +1045,21 @@ export default function HomePage() {
       throw new Error("Save failed");
     }
     notify(message);
+
+    // The dedicated task sheets have no completion-date column, so record the moment a task
+    // reaches Done in the activity log — that's what the Home "created vs completed" chart reads.
+    const area = TASK_SHEET_AREAS[sheet];
+    if (area && changes.Status !== undefined && closed(changes.Status) && !closed(prev?.Status)) {
+      addAnyRow("HQ_ACTIVITY", {
+        Timestamp: new Date().toISOString(),
+        User: session?.user?.name || "Ahmad",
+        "Action Type": "Task Completed",
+        "Business / Area": area,
+        "Source Type": sheet,
+        "Source ID": id,
+        Detail: `${prev?.Task || prev?.["Clinton Task"] || id} → Done`,
+      }, null).catch(() => { /* best-effort log — the move itself already saved */ });
+    }
   }
 
   // Generic append for any HQ_* sheet

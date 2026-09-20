@@ -35,3 +35,59 @@
 .progress>span{display:block;height:100%;background:var(--good);border-radius:99px;transition:width .3s}
 .wrapup{padding:12px 0;border-bottom:1px solid var(--line)}
 .wrapup:last-child{border-bottom:0}
+
+/* ── Home charts ── */
+/* Colors: --stage-* is the validated 4-step ordinal blue ramp (to do -> done); --series-* are categorical slots 1-2. Text uses ink tokens only. */
+.viz{--stage-todo:#86b6ef;--stage-progress:#5598e7;--stage-review:#256abf;--stage-done:#104281;--series-1:#2a78d6;--series-2:#eb6834;--viz-ink:#18302b;--viz-ink-2:#53665f;--viz-muted:#6a7973;--viz-grid:#e6ebe8;--viz-axis:#c9d3ce;--viz-track:#e8eef4;margin:0;color:var(--viz-ink);position:relative}
+.viz-grid{display:grid;gap:11px;grid-template-columns:repeat(6,1fr);margin:11px 0}
+.viz-hero{grid-column:span 2}.viz-wide{grid-column:span 4}.viz-half{grid-column:span 3}
+.viz-title{font-size:13px;font-weight:800;margin:0}
+.viz-note{color:var(--viz-ink-2);font-size:11.5px;margin:3px 0 10px}
+.viz-empty{color:var(--viz-muted);font-size:12.5px;margin:18px 0}
+.viz-hero-figure{font-size:56px;font-weight:700;letter-spacing:-.02em;line-height:1.05;margin:10px 0 2px}
+.viz-hero-figure span{color:var(--viz-muted);font-size:26px;font-weight:600;margin-left:2px}
+.viz-meter{background:#cde2fb;border-radius:99px;height:10px;overflow:hidden}
+.viz-meter>span{background:#256abf;border-radius:99px;display:block;height:100%;min-width:0;transition:width .3s}
+.viz-legend{display:flex;flex-wrap:wrap;gap:4px 14px;list-style:none;margin:0 0 10px;padding:0;font-size:11.5px;color:var(--viz-ink-2)}
+.viz-legend li{align-items:center;display:flex;gap:6px}
+.viz-key{border-radius:2px;display:inline-block;height:10px;width:10px}
+.viz-key-line{border-radius:2px;display:inline-block;height:3px;width:14px}
+.viz-plot{position:relative}
+.viz-row{align-items:center;display:grid;gap:10px;grid-template-columns:120px 1fr 88px;padding:5px 0}
+.viz-row-bar{grid-template-columns:120px 1fr;outline-offset:2px}
+.viz-row-label{color:var(--viz-ink);font-size:12px}
+.viz-row-value{color:var(--viz-ink-2);font-size:11.5px;text-align:right;white-space:nowrap}
+.viz-breakdown{display:grid;gap:7px;list-style:none;margin:16px 0 0;padding:0}
+.viz-breakdown li{align-items:center;color:var(--viz-ink-2);display:flex;font-size:12px;gap:8px}
+.viz-breakdown strong{color:var(--viz-ink);margin-left:auto}
+.viz-row-value strong{color:var(--viz-ink)}
+.viz-stack{display:flex;gap:2px;height:16px}
+.viz-seg{border-radius:0;min-width:4px;outline-offset:2px}
+.viz-seg.last{border-radius:0 4px 4px 0}
+.viz-seg:hover,.viz-seg:focus-visible{filter:brightness(1.14)}
+.viz-bar-wrap{align-items:center;display:flex;gap:8px;min-height:16px}
+.viz-bar{background:var(--series-1);border-radius:0 4px 4px 0;display:block;height:16px;min-width:4px}
+.viz-row-bar:hover .viz-bar,.viz-row-bar:focus-visible .viz-bar{filter:brightness(1.14)}
+.viz-bar-val{color:var(--viz-ink);font-size:12px;font-weight:700}
+.viz-line{outline-offset:2px}
+.viz-line svg{display:block;overflow:visible}
+.viz-axis,.viz-hairline{stroke-width:1}
+.viz-hairline{stroke:var(--viz-grid)}
+.viz-axis{stroke:var(--viz-axis)}
+.viz-cross{stroke:var(--viz-axis);stroke-width:1}
+.viz-tick{fill:var(--viz-muted);font-size:11px}
+.viz-dot{stroke:#fff;stroke-width:2}
+.viz-tip{background:#fff;border:1px solid var(--line);border-radius:9px;box-shadow:0 6px 20px rgba(23,59,91,.18);font-size:12px;max-width:192px;padding:8px 10px;pointer-events:none;position:absolute;transform:translate(-50%,calc(-100% - 10px));z-index:5}
+.viz-tip.below{transform:translate(-50%,10px)}
+.viz-tip-title{display:block;font-size:11.5px;margin-bottom:3px}
+.viz-tip-row{align-items:center;display:flex;gap:6px}
+.viz-tip-row span:last-child{color:var(--viz-ink-2)}
+.viz-tip-row strong{color:var(--viz-ink);font-size:13px}
+.viz-table{margin-top:10px}
+.viz-table summary{color:#275f9b;cursor:pointer;font-size:11px;font-weight:700}
+.viz-table table{border-collapse:collapse;font-size:12px;margin-top:6px;width:100%}
+.viz-table th,.viz-table td{border-bottom:1px solid var(--line);padding:4px 8px;text-align:left}
+.viz-table thead th{color:var(--viz-ink-2);font-size:11px}
+@media(max-width:1000px){.viz-hero,.viz-wide,.viz-half{grid-column:span 6}}
+@media(max-width:560px){.viz-row{grid-template-columns:96px 1fr}.viz-row-value{grid-column:1/-1;padding-left:106px;margin-top:-4px}.viz-row-bar{grid-template-columns:96px 1fr}}
+@media(prefers-reduced-motion:reduce){.viz-meter>span{transition:none}}
