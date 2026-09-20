@@ -114,8 +114,6 @@ function AsyncButton({ onClick, children, pendingLabel = "Working…", className
 }
 
 const closed = (v = "") => /done|complete|closed/i.test(v);
-const isException = (row: SheetRow) =>
-  row["Management Escalation?"] === "Yes" || row["Blocked?"] === "Yes" || row["Exception?"] === "Yes";
 
 // ── Kanban pipelines ─────────────────────────────────────────────────────
 // A pipeline is an ordered list of stages — that order is both the column
@@ -811,7 +809,7 @@ const areas: { id: View; label: string; icon: string; match: string[] }[] = [
   { id: "iron", label: "IRON MARKS", icon: "◇", match: ["iron"] },
 ];
 
-function Home({ data, onSave, onDelete, navigate }: { data: HqBootstrap; onSave: (u: SheetRow) => Promise<void>; onDelete: (id: string) => Promise<void>; navigate: (v: View) => void }) {
+function Home({ data, onSave, onDelete }: { data: HqBootstrap; onSave: (u: SheetRow) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
   const open = data.work.filter(r => !closed(r.Status));
   const blocked = open.filter(r => r["Blocked?"] === "Yes");
   const critical = open.filter(r => r["Critical Move?"] === "Yes");
@@ -895,19 +893,6 @@ function Home({ data, onSave, onDelete, navigate }: { data: HqBootstrap; onSave:
           );
         })()}
       </Section>
-      <h2 className="section-title home-band">Operating areas</h2>
-      <section className="area-grid">
-        {functions.map((name, index) => {
-          const rows = data.work.filter(r => r["Project / Function"] === name);
-          return (
-            <button className={`area-card tone-${index % 5}`} key={name} onClick={() => navigate("operate")}>
-              <span className="area-icon">{["🍓", "✿", "$", "◎", "◉", "●"][index]}</span>
-              <b>{name}</b>
-              <small>{rows.filter(r => !closed(r.Status)).length} open · {rows.filter(isException).length} attention</small>
-            </button>
-          );
-        })}
-      </section>
     </>
   );
 }
@@ -1546,7 +1531,7 @@ export default function HomePage() {
     if (error) return <div className="card error-state">{error}</div>;
 
     switch (view) {
-      case "home": return <Home data={data} onSave={saveRow} onDelete={deleteWorkItem} navigate={nav} />;
+      case "home": return <Home data={data} onSave={saveRow} onDelete={deleteWorkItem} />;
 
       case "work": return (
         <>
