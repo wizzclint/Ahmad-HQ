@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
 import type { HqBootstrap, SheetRow } from "@/lib/hq-types";
 import { functions } from "@/lib/hq-types";
@@ -21,6 +21,97 @@ const emptyData: HqBootstrap = {
   requests: [], training: [], systemAccess: [], periods: [], notes: [], activity: [],
   firefliesLegacy: [], ironTasks: [], customSheetDefs: [], customSheets: {},
 };
+
+// ── Feedback layer ───────────────────────────────────────────────────────
+// Every action gets visible confirmation: a toast when it finishes (or fails),
+// a thin progress bar while any request is in flight, and buttons that
+// disable + show a spinner while their own action runs so nobody clicks twice.
+// Module-level on purpose, so child components and the page's handlers can
+// all call notify()/tracked() without prop threading.
+type ToastKind = "success" | "error" | "info";
+type ToastItem = { id: number; kind: ToastKind; text: string };
+let toastSeq = 0;
+const toastListeners = new Set<(t: ToastItem) => void>();
+function notify(text: string, kind: ToastKind = "success") {
+  const item: ToastItem = { id: ++toastSeq, kind, text };
+  toastListeners.forEach(l => l(item));
+}
+
+let busyCount = 0;
+const busyListeners = new Set<(n: number) => void>();
+async function tracked<T>(fn: () => Promise<T>): Promise<T> {
+  busyCount++;
+  busyListeners.forEach(l => l(busyCount));
+  try {
+    return await fn();
+  } finally {
+    busyCount--;
+    busyListeners.forEach(l => l(busyCount));
+  }
+}
+
+function FeedbackHost() {
+  const [toasts, setToasts] = useState<ToastItem[]>([]);
+  const [busy, setBusy] = useState(0);
+  useEffect(() => {
+    const onToast = (t: ToastItem) => {
+      setToasts(cur => [...cur.slice(-3), t]);
+      setTimeout(() => setToasts(cur => cur.filter(x => x.id !== t.id)), t.kind === "error" ? 6000 : 3000);
+    };
+    toastListeners.add(onToast);
+    busyListeners.add(setBusy);
+    return () => { toastListeners.delete(onToast); busyListeners.delete(setBusy); };
+  }, []);
+  return (
+    <>
+      <div className={`busy-bar ${busy > 0 ? "on" : ""}`} aria-hidden="true" />
+      <div className="toast-stack" role="status" aria-live="polite">
+        {toasts.map(t => (
+          <div key={t.id} className={`toast ${t.kind}`}>
+            <span className="toast-icon">{t.kind === "success" ? "✓" : t.kind === "error" ? "!" : "i"}</span>
+            <span className="toast-text">{t.text}</span>
+            <button className="toast-close" aria-label="Dismiss" onClick={() => setToasts(cur => cur.filter(x => x.id !== t.id))}>×</button>
+          </div>
+        ))}
+      </div>
+    </>
+  );
+}
+
+// A button for async actions: disables itself and shows a spinner + label
+// while the action runs. The action reports its own success/failure toast.
+function AsyncButton({ onClick, children, pendingLabel = "Working…", className = "btn", style, disabled }: {
+  onClick: () => Promise<unknown> | unknown;
+  children: React.ReactNode;
+  pendingLabel?: string;
+  className?: string;
+  style?: React.CSSProperties;
+  disabled?: boolean;
+}) {
+  const [pending, setPending] = useState(false);
+  const mounted = useRef(true);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
+  const handle = async () => {
+    if (pending) return;
+    setPending(true);
+    try {
+      await onClick();
+    } catch {
+      // the action already surfaced its own error toast
+    } finally {
+      if (mounted.current) setPending(false);
+    }
+  };
+  return (
+    <button type="button" className={`${className}${pending ? " is-pending" : ""}`} style={style} disabled={pending || disabled} aria-busy={pending} onClick={handle}>
+      {pending && <span className="spinner" aria-hidden="true" />}
+      {pending ? pendingLabel : children}
+    </button>
+  );
+}
 
 const closed = (v = "") => /done|complete|closed/i.test(v);
 const isException = (row: SheetRow) =>
@@ -173,6 +264,8 @@ function EditableDataTable({
       headers.forEach(h => { if (editValues[h] !== rows[idx][h]) changes[h] = editValues[h] ?? ""; });
       if (Object.keys(changes).length) await onUpdate(sheetName, id, changes);
       setEditingIdx(null);
+    } catch {
+      // the handler already showed an error toast; leave the editor open so nothing typed is lost
     } finally { setSaving(false); }
   };
 
@@ -182,6 +275,8 @@ function EditableDataTable({
       await onAdd(sheetName, newRow);
       setAdding(false);
       setNewRow({});
+    } catch {
+      // the handler already showed an error toast; keep the row being typed
     } finally { setSaving(false); }
   };
 
@@ -189,7 +284,7 @@ function EditableDataTable({
     const id = rows[idx][headers[0]];
     if (!confirm(`Delete this record${id ? ` (${id})` : ""}? This cannot be undone.`)) return;
     setSaving(true);
-    try { await onDelete(sheetName, id); } finally { setSaving(false); }
+    try { await onDelete(sheetName, id); } catch { /* error toast already shown */ } finally { setSaving(false); }
   };
 
   return (
@@ -236,7 +331,7 @@ function EditableDataTable({
                     ))}
                     <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
                       <button className="link-button" style={{ fontSize: "0.75rem" }} onClick={() => startEdit(i)}>Edit</button>
-                      <button className="link-button" style={{ fontSize: "0.75rem", marginLeft: 8, color: "#ae493e" }} onClick={() => handleDelete(i)} disabled={saving}>Delete</button>
+                      <button className="link-button" style={{ fontSize: "0.75rem", marginLeft: 8, color: "#ae493e" }} onClick={() => handleDelete(i)} disabled={saving}>{saving ? "Working…" : "Delete"}</button>
                     </td>
                   </>
                 )}
@@ -332,8 +427,8 @@ function Badge({ value }: { value?: string }) {
 function WorkRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: SheetRow) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
   const [editing, setEditing] = useState(false);
   const [update, setUpdate] = useState<SheetRow>({ id: row.ID, type: "work", status: row.Status, waitingOn: row["Waiting On"], blocked: row["Blocked?"], result: row["Result / Completion Note"], evidence: row["Evidence / Drive Link"], why: row["WHY / OUTCOME SUPPORTED"] });
-  const handleDelete = () => {
-    if (confirm(`Delete "${row["Work Item / Next Action"] || row.ID}"? This cannot be undone.`)) onDelete(row.ID);
+  const handleDelete = async () => {
+    if (confirm(`Delete "${row["Work Item / Next Action"] || row.ID}"? This cannot be undone.`)) await onDelete(row.ID);
   };
   return (
     <article className="task-row">
@@ -345,7 +440,7 @@ function WorkRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: SheetRo
           <input value={update.evidence || ""} onChange={e => setUpdate({ ...update, evidence: e.target.value })} placeholder="Evidence / Drive link" />
           <div className="edit-actions">
             <button className="link-button" onClick={() => setEditing(false)}>Cancel</button>
-            <button className="btn primary" onClick={async () => { await onSave(update); setEditing(false); }}>Save changes</button>
+            <AsyncButton className="btn primary" pendingLabel="Saving…" onClick={async () => { await onSave(update); setEditing(false); }}>Save changes</AsyncButton>
           </div>
         </div>
       ) : (
@@ -358,7 +453,7 @@ function WorkRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: SheetRo
           <div className="task-actions">
             <Badge value={row.Status} />
             <button className="link-button" onClick={() => setEditing(true)}>Edit</button>
-            <button className="link-button" style={{ color: "#ae493e" }} onClick={handleDelete}>Delete</button>
+            <AsyncButton className="link-button" style={{ color: "#ae493e" }} pendingLabel="Deleting…" onClick={handleDelete}>Delete</AsyncButton>
           </div>
         </>
       )}
@@ -369,8 +464,8 @@ function WorkRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: SheetRo
 function ControlRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: SheetRow) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
   const [editing, setEditing] = useState(false);
   const [update, setUpdate] = useState<SheetRow>({ id: row.ID, type: "control", status: row.Status, evidence: row["Evidence / Link"], exception: row["Exception?"], notes: row["Notes / Next Action"] });
-  const handleDelete = () => {
-    if (confirm(`Delete "${row.Control || row.ID}"? This cannot be undone.`)) onDelete(row.ID);
+  const handleDelete = async () => {
+    if (confirm(`Delete "${row.Control || row.ID}"? This cannot be undone.`)) await onDelete(row.ID);
   };
   return (
     <article className="control-card">
@@ -382,7 +477,7 @@ function ControlRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: Shee
           <input value={update.notes || ""} onChange={e => setUpdate({ ...update, notes: e.target.value })} placeholder="Notes / next action" />
           <div className="edit-actions">
             <button className="link-button" onClick={() => setEditing(false)}>Cancel</button>
-            <button className="btn primary" onClick={async () => { await onSave(update); setEditing(false); }}>Save changes</button>
+            <AsyncButton className="btn primary" pendingLabel="Saving…" onClick={async () => { await onSave(update); setEditing(false); }}>Save changes</AsyncButton>
           </div>
         </div>
       ) : (
@@ -391,7 +486,7 @@ function ControlRow({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: Shee
             <Badge value={row.Status} />
             <div>
               <button className="link-button" onClick={() => setEditing(true)}>Edit</button>
-              <button className="link-button" style={{ color: "#ae493e", marginLeft: 10 }} onClick={handleDelete}>Delete</button>
+              <AsyncButton className="link-button" style={{ color: "#ae493e", marginLeft: 10 }} pendingLabel="Deleting…" onClick={handleDelete}>Delete</AsyncButton>
             </div>
           </div>
           <h3>{row.Control}</h3>
@@ -413,7 +508,7 @@ function KanbanBoard<T extends SheetRow>({
   rows: T[];
   statusField?: string;
   pipeline: Pipeline;
-  onMove: (row: T, newStatus: string) => void;
+  onMove: (row: T, newStatus: string) => void | Promise<unknown>;
   renderCard: (row: T) => React.ReactNode;
 }) {
   const [dragId, setDragId] = useState<string | null>(null);
@@ -431,7 +526,10 @@ function KanbanBoard<T extends SheetRow>({
             onDrop={() => {
               if (!dragId) return;
               const row = rows.find(r => idOf(r) === dragId);
-              if (row && bucketFor(row[statusField], pipeline) !== stage.id) onMove(row, stage.label);
+              if (row && bucketFor(row[statusField], pipeline) !== stage.id) {
+                // the handler reports its own toast; swallow the rejection so a failed move isn't an unhandled error
+                Promise.resolve(onMove(row, stage.label)).catch(() => {});
+              }
               setDragId(null);
             }}
           >
@@ -457,8 +555,8 @@ function KanbanBoard<T extends SheetRow>({
 function WorkKanbanCard({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: SheetRow) => Promise<void>; onDelete: (id: string) => Promise<void> }) {
   const [editing, setEditing] = useState(false);
   const [update, setUpdate] = useState<SheetRow>({ id: row.ID, type: "work", status: row.Status, waitingOn: row["Waiting On"], result: row["Result / Completion Note"], evidence: row["Evidence / Drive Link"] });
-  const handleDelete = () => {
-    if (confirm(`Delete "${row["Work Item / Next Action"] || row.ID}"? This cannot be undone.`)) onDelete(row.ID);
+  const handleDelete = async () => {
+    if (confirm(`Delete "${row["Work Item / Next Action"] || row.ID}"? This cannot be undone.`)) await onDelete(row.ID);
   };
   if (editing) {
     return (
@@ -470,7 +568,7 @@ function WorkKanbanCard({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: 
           <input value={update.evidence || ""} onChange={e => setUpdate({ ...update, evidence: e.target.value })} placeholder="Evidence / Drive link" />
           <div className="edit-actions">
             <button className="link-button" onClick={() => setEditing(false)}>Cancel</button>
-            <button className="btn primary" onClick={async () => { await onSave(update); setEditing(false); }}>Save</button>
+            <AsyncButton className="btn primary" pendingLabel="Saving…" onClick={async () => { await onSave(update); setEditing(false); }}>Save</AsyncButton>
           </div>
         </div>
       </div>
@@ -483,7 +581,7 @@ function WorkKanbanCard({ row, onSave, onDelete }: { row: SheetRow; onSave: (u: 
       {row["Critical Move?"] === "Yes" && <span className="badge bad">Critical</span>}
       <div className="kanban-card-actions">
         <button className="link-button" onClick={() => setEditing(true)}>Edit</button>
-        <button className="link-button" style={{ color: "#ae493e" }} onClick={handleDelete}>Delete</button>
+        <AsyncButton className="link-button" style={{ color: "#ae493e" }} pendingLabel="Deleting…" onClick={handleDelete}>Delete</AsyncButton>
       </div>
     </div>
   );
@@ -513,8 +611,8 @@ function GenericKanbanCard({
     setEditing(false);
   };
 
-  const handleDelete = () => {
-    if (confirm(`Delete "${row[titleField] || id}"? This cannot be undone.`)) onDelete(sheetName, id);
+  const handleDelete = async () => {
+    if (confirm(`Delete "${row[titleField] || id}"? This cannot be undone.`)) await onDelete(sheetName, id);
   };
 
   if (editing) {
@@ -532,7 +630,7 @@ function GenericKanbanCard({
         ))}
         <div className="edit-actions">
           <button className="link-button" onClick={() => { setValues(row); setEditing(false); }}>Cancel</button>
-          <button className="btn primary" onClick={handleSave}>Save</button>
+          <AsyncButton className="btn primary" pendingLabel="Saving…" onClick={handleSave}>Save</AsyncButton>
         </div>
       </div>
     );
@@ -545,7 +643,7 @@ function GenericKanbanCard({
       {row.Priority && <span className={`badge ${/p0/i.test(row.Priority) ? "bad" : ""}`}>{row.Priority}</span>}
       <div className="kanban-card-actions">
         <button className="link-button" onClick={() => setEditing(true)}>Edit</button>
-        <button className="link-button" style={{ color: "#ae493e" }} onClick={handleDelete}>Delete</button>
+        <AsyncButton className="link-button" style={{ color: "#ae493e" }} pendingLabel="Deleting…" onClick={handleDelete}>Delete</AsyncButton>
       </div>
     </div>
   );
@@ -742,6 +840,7 @@ export default function HomePage() {
   const [ironTab, setIronTab] = useState<"work" | "tasks">("work");
   const [ironTasksBoardView, setIronTasksBoardView] = useState(true);
   const [areaWorkBoardView, setAreaWorkBoardView] = useState(true);
+  const [assigning, setAssigning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [showGuide, setShowGuide] = useState(false);
@@ -793,9 +892,13 @@ export default function HomePage() {
     ? data.work.filter(r => r["Project / Function"] === selectedFunction)
     : areaRows;
 
-  async function saveRow(update: SheetRow) {
-    const res = await fetch("/api/hq", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update) });
-    if (!res.ok) throw new Error("Save failed");
+  // Network wrapper: a dropped connection becomes `null` instead of a thrown TypeError.
+  const call = (url: string, init: RequestInit) => fetch(url, init).catch(() => null);
+
+  async function saveRow(update: SheetRow, message = "Saved") {
+    const prevWork = data.work.find(r => r.ID === update.id);
+    const prevControl = data.controls.find(r => r.ID === update.id);
+    // Optimistic: show the change immediately, roll it back if the server says no.
     setData(cur => ({
       ...cur,
       work: cur.work.map(r => r.ID !== update.id ? r : {
@@ -813,6 +916,17 @@ export default function HomePage() {
         ...(update.notes !== undefined && { "Notes / Next Action": update.notes }),
       }),
     }));
+    const res = await tracked(() => call("/api/hq", { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(update) }));
+    if (!res || !res.ok) {
+      setData(cur => ({
+        ...cur,
+        work: cur.work.map(r => (prevWork && r.ID === update.id ? prevWork : r)),
+        controls: cur.controls.map(r => (prevControl && r.ID === update.id ? prevControl : r)),
+      }));
+      notify("Couldn't save that change — it was undone. Please try again.", "error");
+      throw new Error("Save failed");
+    }
+    notify(message);
   }
 
   // Sheets created via "+ New Register" aren't a fixed HqBootstrap field (sheetToKey
@@ -825,60 +939,90 @@ export default function HomePage() {
     });
   }
 
-  // Generic update for any HQ_* sheet
-  async function updateAnyRow(sheet: string, id: string, changes: Record<string, string>) {
-    const res = await fetch("/api/hq", {
+  // The sheet's current rows for a generic sheet, whether it's a built-in field or a custom register.
+  function currentSheetRows(sheet: string): SheetRow[] {
+    const dataKey = sheetToKey[sheet];
+    return dataKey ? (data[dataKey as keyof HqBootstrap] as SheetRow[]) : (data.customSheets[sheet] || []);
+  }
+
+  // Generic update for any HQ_* sheet. Optimistic: the change shows instantly and is rolled back if saving fails.
+  async function updateAnyRow(sheet: string, id: string, changes: Record<string, string>, message = "Saved") {
+    const isTarget = (r: SheetRow) => r[Object.keys(r)[0]] === id;
+    const prev = currentSheetRows(sheet).find(isTarget);
+    updateSheetRows(sheet, rows => rows.map(r => isTarget(r) ? { ...r, ...changes } : r));
+    const res = await tracked(() => call("/api/hq", {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "generic", sheet, id, changes }),
-    });
-    if (!res.ok) throw new Error("Save failed");
-    updateSheetRows(sheet, rows => rows.map(r => r[Object.keys(r)[0]] === id ? { ...r, ...changes } : r));
+    }));
+    if (!res || !res.ok) {
+      if (prev) updateSheetRows(sheet, rows => rows.map(r => isTarget(r) ? prev : r));
+      notify("Couldn't save that change — it was undone. Please try again.", "error");
+      throw new Error("Save failed");
+    }
+    notify(message);
   }
 
   // Generic append for any HQ_* sheet
-  async function addAnyRow(sheet: string, row: Record<string, string>) {
-    const res = await fetch("/api/hq", {
+  async function addAnyRow(sheet: string, row: Record<string, string>, message: string | null = "Added") {
+    const res = await tracked(() => call("/api/hq", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "generic", sheet, row }),
-    });
-    if (!res.ok) throw new Error("Add failed");
+    }));
+    if (!res || !res.ok) {
+      notify("Couldn't add that — please try again.", "error");
+      throw new Error("Add failed");
+    }
     updateSheetRows(sheet, rows => [...rows, row]);
+    if (message) notify(message);
   }
 
   // Generic delete for any HQ_* sheet
   async function deleteAnyRow(sheet: string, id: string) {
-    const res = await fetch("/api/hq", {
+    const res = await tracked(() => call("/api/hq", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "generic", sheet, id }),
-    });
-    if (!res.ok) { setError("Delete failed."); return; }
+    }));
+    if (!res || !res.ok) {
+      notify("Couldn't delete that — please try again.", "error");
+      throw new Error("Delete failed");
+    }
     updateSheetRows(sheet, rows => rows.filter(r => r[Object.keys(r)[0]] !== id));
+    notify("Deleted");
   }
 
   async function deleteWorkItem(id: string) {
-    const res = await fetch("/api/hq", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "work", id }) });
-    if (!res.ok) { setError("Delete failed."); return; }
+    const res = await tracked(() => call("/api/hq", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "work", id }) }));
+    if (!res || !res.ok) {
+      notify("Couldn't delete that — please try again.", "error");
+      throw new Error("Delete failed");
+    }
     setData(cur => ({ ...cur, work: cur.work.filter(r => r.ID !== id) }));
+    notify("Deleted");
   }
 
   async function deleteControlItem(id: string) {
-    const res = await fetch("/api/hq", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "control", id }) });
-    if (!res.ok) { setError("Delete failed."); return; }
+    const res = await tracked(() => call("/api/hq", { method: "DELETE", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ type: "control", id }) }));
+    if (!res || !res.ok) {
+      notify("Couldn't delete that — please try again.", "error");
+      throw new Error("Delete failed");
+    }
     setData(cur => ({ ...cur, controls: cur.controls.filter(r => r.ID !== id) }));
+    notify("Deleted");
   }
 
   // Create a brand-new register sheet — no code change needed for it to show up.
   async function createSheet(label: string, columns: string[]) {
-    const res = await fetch("/api/hq", {
+    const res = await tracked(() => call("/api/hq", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ type: "createSheet", label, columns }),
-    });
-    const payload = await res.json().catch(() => null);
-    if (!res.ok || !payload?.ok) { setError(payload?.error || "Could not create the new sheet."); return null; }
+    }));
+    const payload = await res?.json().catch(() => null);
+    if (!res || !res.ok || !payload?.ok) { notify(payload?.error || "Could not create the new sheet.", "error"); return null; }
+    notify(`Register "${payload.label}" created`);
     setData(cur => ({
       ...cur,
       customSheetDefs: [...cur.customSheetDefs, { name: payload.name, label: payload.label, columns: payload.columns }],
@@ -889,53 +1033,62 @@ export default function HomePage() {
 
   async function assignTask(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const form = new FormData(event.currentTarget);
+    if (assigning) return;
+    // Grab the form now: React clears event.currentTarget once this handler yields (after the first await).
+    const formEl = event.currentTarget;
+    const form = new FormData(formEl);
     const description = String(form.get("description") || "").trim();
     const areaKey = String(form.get("area") || "");
     const assignee = String(form.get("assignee") || "").trim() || "Ahmad";
     const due = String(form.get("due") || "");
     const priority = String(form.get("priority") || "");
     const route = CAPTURE_ROUTES[areaKey];
-    if (!description || !route) { setError("A description and area are required."); return; }
+    if (!description || !route) { notify("Add a task description and choose an area first.", "error"); return; }
 
-    let destSheet: string;
-    let newId: string;
-
-    if (route.kind === "work") {
-      // No client-side ID here — the server is the sole authority for work item IDs (see lib/hq-data.ts nextWorkId).
-      const row: SheetRow = { "Project / Function": route.label, "Work Item / Next Action": description, Owner: assignee, Priority: priority, "Due Date": due };
-      const res = await fetch("/api/hq", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(row) });
-      const payload = await res.json().catch(() => null);
-      if (!res.ok || !payload?.id) { setError("The task could not be saved."); return; }
-      setData(cur => ({ ...cur, work: [{ ...row, ID: payload.id, Status: "Open" }, ...cur.work] }));
-      destSheet = "HQ_WORK";
-      newId = payload.id;
-    } else {
-      newId = `${route.idPrefix}-${Date.now().toString(36).toUpperCase()}`;
-      const row: SheetRow = { ID: newId, ...route.buildRow({ description, assignee, due, priority }) };
-      try {
-        await addAnyRow(route.sheet, row);
-      } catch {
-        setError("The task could not be saved.");
-        return;
-      }
-      destSheet = route.sheet;
-    }
-
-    // Best-effort history log — a failure here shouldn't undo the task that already saved above.
+    setAssigning(true);
     try {
-      await addAnyRow("HQ_ACTIVITY", {
-        Timestamp: new Date().toISOString(),
-        User: "Ahmad",
-        "Action Type": "Task Assigned",
-        "Business / Area": route.label,
-        "Source Type": destSheet,
-        "Source ID": newId,
-        Detail: `${description} → ${assignee}`,
-      });
-    } catch { /* history log is best-effort */ }
+      let destSheet: string;
+      let newId: string;
 
-    event.currentTarget.reset();
+      if (route.kind === "work") {
+        // No client-side ID here — the server is the sole authority for work item IDs (see lib/hq-data.ts nextWorkId).
+        const row: SheetRow = { "Project / Function": route.label, "Work Item / Next Action": description, Owner: assignee, Priority: priority, "Due Date": due };
+        const res = await tracked(() => call("/api/hq", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(row) }));
+        const payload = await res?.json().catch(() => null);
+        if (!res || !res.ok || !payload?.id) { notify("The task could not be saved — please try again.", "error"); return; }
+        setData(cur => ({ ...cur, work: [{ ...row, ID: payload.id, Status: "Open" }, ...cur.work] }));
+        destSheet = "HQ_WORK";
+        newId = payload.id;
+      } else {
+        newId = `${route.idPrefix}-${Date.now().toString(36).toUpperCase()}`;
+        const row: SheetRow = { ID: newId, ...route.buildRow({ description, assignee, due, priority }) };
+        try {
+          await addAnyRow(route.sheet, row, null);
+        } catch {
+          notify("The task could not be saved — please try again.", "error");
+          return;
+        }
+        destSheet = route.sheet;
+      }
+
+      // Best-effort history log — a failure here shouldn't undo the task that already saved above.
+      try {
+        await addAnyRow("HQ_ACTIVITY", {
+          Timestamp: new Date().toISOString(),
+          User: "Ahmad",
+          "Action Type": "Task Assigned",
+          "Business / Area": route.label,
+          "Source Type": destSheet,
+          "Source ID": newId,
+          Detail: `${description} → ${assignee}`,
+        }, null);
+      } catch { /* history log is best-effort */ }
+
+      notify(`Task assigned to ${assignee} in ${route.label}`);
+      formEl.reset();
+    } finally {
+      setAssigning(false);
+    }
   }
 
   const nav = (v: View) => setView(v);
@@ -970,7 +1123,7 @@ export default function HomePage() {
         <KanbanBoard
           rows={rows}
           pipeline={WORK_PIPELINE}
-          onMove={(row, status) => saveRow({ id: row.ID, type: "work", status })}
+          onMove={(row, status) => saveRow({ id: row.ID, type: "work", status }, `Moved to ${status}`)}
           renderCard={row => <WorkKanbanCard row={row} onSave={saveRow} onDelete={deleteWorkItem} />}
         />
       ) : (
@@ -1023,7 +1176,7 @@ export default function HomePage() {
               <KanbanBoard
                 rows={data.work}
                 pipeline={WORK_PIPELINE}
-                onMove={(row, status) => saveRow({ id: row.ID, type: "work", status })}
+                onMove={(row, status) => saveRow({ id: row.ID, type: "work", status }, `Moved to ${status}`)}
                 renderCard={row => <WorkKanbanCard row={row} onSave={saveRow} onDelete={deleteWorkItem} />}
               />
             ) : (
@@ -1120,7 +1273,7 @@ export default function HomePage() {
                 <KanbanBoard
                   rows={data.gardeniaTasks}
                   pipeline={GARDENIA_PIPELINE}
-                  onMove={(row, status) => updateAnyRow("HQ_GARDENIA_TASKS", row.ID, { Status: status })}
+                  onMove={(row, status) => updateAnyRow("HQ_GARDENIA_TASKS", row.ID, { Status: status }, `Moved to ${status}`)}
                   renderCard={row => (
                     <GenericKanbanCard
                       row={row}
@@ -1155,7 +1308,7 @@ export default function HomePage() {
                   rows={data.gardeniaPipeline}
                   statusField="Stage"
                   pipeline={SALES_PIPELINE}
-                  onMove={(row, stage) => updateAnyRow("HQ_GARDENIA_PIPELINE", row["Account / Prospect"], { Stage: stage })}
+                  onMove={(row, stage) => updateAnyRow("HQ_GARDENIA_PIPELINE", row["Account / Prospect"], { Stage: stage }, `${row["Account / Prospect"]} moved to ${stage}`)}
                   renderCard={row => (
                     <GenericKanbanCard
                       row={row}
@@ -1250,7 +1403,7 @@ export default function HomePage() {
                   <KanbanBoard
                     rows={data.ironTasks}
                     pipeline={GARDENIA_PIPELINE}
-                    onMove={(row, status) => updateAnyRow("HQ_IRONMARK_TASKS", row.ID, { Status: status })}
+                    onMove={(row, status) => updateAnyRow("HQ_IRONMARK_TASKS", row.ID, { Status: status }, `Moved to ${status}`)}
                     renderCard={row => (
                       <GenericKanbanCard
                         row={row}
@@ -1288,7 +1441,7 @@ export default function HomePage() {
               <KanbanBoard
                 rows={data.firefliesLegacy}
                 pipeline={WORK_PIPELINE}
-                onMove={(row, status) => updateAnyRow("HQ_FIREFLIES_LEGACY", row.ID, { Status: status })}
+                onMove={(row, status) => updateAnyRow("HQ_FIREFLIES_LEGACY", row.ID, { Status: status }, `Moved to ${status}`)}
                 renderCard={row => (
                   <GenericKanbanCard
                     row={row}
@@ -1339,7 +1492,10 @@ export default function HomePage() {
                 </select>
               </label>
               <label>Due<input name="due" placeholder="Friday, 12 Sep" /></label>
-              <button className="btn primary" type="submit">Assign task</button>
+              <button className={`btn primary${assigning ? " is-pending" : ""}`} type="submit" disabled={assigning} aria-busy={assigning}>
+                {assigning && <span className="spinner" aria-hidden="true" />}
+                {assigning ? "Assigning…" : "Assign task"}
+              </button>
             </form>
             <Section title="Assignment History">
               {activityHistory.length ? (
@@ -1352,13 +1508,14 @@ export default function HomePage() {
                         <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r["Business / Area"] || "—"}</td>
                         <td style={{ padding: "6px 10px" }}>{r.Detail || "—"}</td>
                         <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>
-                          <button
+                          <AsyncButton
                             className="link-button"
                             style={{ color: "#ae493e" }}
-                            onClick={() => { if (confirm("Delete this history entry? This cannot be undone.")) deleteAnyRow("HQ_ACTIVITY", r.Timestamp); }}
+                            pendingLabel="Deleting…"
+                            onClick={async () => { if (confirm("Delete this history entry? This cannot be undone.")) await deleteAnyRow("HQ_ACTIVITY", r.Timestamp); }}
                           >
                             Delete
-                          </button>
+                          </AsyncButton>
                         </td>
                       </tr>
                     ))}</tbody>
@@ -1408,17 +1565,13 @@ export default function HomePage() {
 
   const runMaintenance = async () => {
     if (!confirm("Generate missing daily/weekly/monthly checklists?")) return;
-    try {
-      const res = await fetch("/api/hq/maintenance", { method: "POST" });
-      const payload = await res.json();
-      if (payload.ok) {
-        alert(`Maintenance complete. Generated ${payload.generatedCount} new checklists.`);
-        window.location.reload();
-      } else {
-        alert("Maintenance failed: " + (payload.error || "Unknown error"));
-      }
-    } catch (e) {
-      alert("Error running maintenance");
+    const res = await tracked(() => call("/api/hq/maintenance", { method: "POST" }));
+    const payload = await res?.json().catch(() => null);
+    if (payload?.ok) {
+      notify(`Maintenance complete — generated ${payload.generatedCount} new checklists. Refreshing…`);
+      setTimeout(() => window.location.reload(), 1500);
+    } else {
+      notify(`Maintenance failed: ${payload?.error || "could not reach the server"}`, "error");
     }
   };
 
@@ -1461,7 +1614,7 @@ export default function HomePage() {
         <div className="user-panel">
           <b>{session?.user?.name || "Loading..."}</b>
           <small>{session?.user?.role || "Unknown Role"}</small>
-          <button className="link-button" onClick={runMaintenance} style={{ marginTop: 8, padding: 0 }}>Run Maintenance</button>
+          <AsyncButton className="link-button" pendingLabel="Running…" onClick={runMaintenance} style={{ marginTop: 8, padding: 0 }}>Run Maintenance</AsyncButton>
           <button className="link-button" onClick={() => setShowGuide(true)} style={{ marginTop: 8, padding: 0, marginLeft: 12 }}>? Guide</button>
           <button className="link-button" onClick={() => signOut()} style={{ marginTop: 8, padding: 0, marginLeft: 12 }}>Sign Out</button>
         </div>
@@ -1470,6 +1623,7 @@ export default function HomePage() {
         {renderView()}
       </main>
       {showGuide && <GuideTour onClose={dismissGuide} />}
+      <FeedbackHost />
     </main>
   );
 }
