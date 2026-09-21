@@ -18,7 +18,7 @@ type Tip = {
 };
 
 // Hover + keyboard-focus tooltip for bar-type marks: follows the pointer, or anchors to the focused mark.
-function useTip() {
+export function useTip() {
   const box = useRef<HTMLDivElement>(null);
   const [tip, setTip] = useState<Tip | null>(null);
   const place = (clientX: number, clientY: number, title: string, rows: Tip["rows"]) => {
@@ -38,7 +38,7 @@ function useTip() {
 }
 
 // Tooltip: value leads, label follows; series keyed by a short color stroke, not a box.
-function TipBox({ tip }: { tip: Tip | null }) {
+export function TipBox({ tip }: { tip: Tip | null }) {
   if (!tip) return null;
   const half = 96; // half the tooltip's max width, so it never spills out of the card
   const left = Math.min(Math.max(tip.x, half), Math.max(tip.w - half, half));
@@ -56,7 +56,7 @@ function TipBox({ tip }: { tip: Tip | null }) {
   );
 }
 
-function Legend({ items }: { items: { label: string; color: string; line?: boolean }[] }) {
+export function Legend({ items }: { items: { label: string; color: string; line?: boolean }[] }) {
   return (
     <ul className="viz-legend">
       {items.map(i => (
@@ -69,7 +69,7 @@ function Legend({ items }: { items: { label: string; color: string; line?: boole
   );
 }
 
-function ChartCard({ title, note, legend, table, className = "", children }: {
+export function ChartCard({ title, note, legend, table, className = "", children }: {
   title: string;
   note?: string;
   legend?: ReactNode;
@@ -93,7 +93,7 @@ function ChartCard({ title, note, legend, table, className = "", children }: {
   );
 }
 
-const Empty = ({ children }: { children: ReactNode }) => <p className="viz-empty">{children}</p>;
+export const Empty = ({ children }: { children: ReactNode }) => <p className="viz-empty">{children}</p>;
 
 // ── Overall progress: one number, so a hero figure + meter rather than a chart ──
 export function ProgressHero({ pct, done, total, open, counts }: { pct: number; done: number; total: number; open: number; counts: Record<StageKey, number> }) {
@@ -217,7 +217,7 @@ export function SalesFunnelChart({ stages }: { stages: { label: string; value: n
   );
 }
 
-// ── Trend: tasks created vs completed per week ──
+// ── Trend: a weekly line chart, used for tasks (created vs completed) and for store sales (actual vs target) ──
 const weekLabel = (iso: string) => new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 
 // Measures its container so the SVG is drawn at real pixel size (crisp text at any width).
@@ -238,22 +238,47 @@ function useWidth<T extends HTMLElement>() {
   return [ref, w] as const;
 }
 
-export function ActivityTrendChart({ bins, total }: { bins: WeekBin[]; total: number }) {
+export type TrendSeries = { key: string; label: string; color: string; values: number[] };
+
+// Four evenly spaced axis ticks from 0. Counts get whole-number ticks; other measures get round ones.
+function trendTicks(max: number, integer: boolean): number[] {
+  if (integer) {
+    const step = Math.ceil(Math.max(3, max) / 3);
+    return [0, step, step * 2, step * 3];
+  }
+  const raw = Math.max(max, 1) / 3;
+  const pow = Math.pow(10, Math.floor(Math.log10(raw)));
+  const norm = raw / pow;
+  const step = (norm <= 1 ? 1 : norm <= 2 ? 2 : norm <= 5 ? 5 : 10) * pow;
+  return [0, step, step * 2, step * 3];
+}
+
+export function TrendChart({ title, note, className = "viz-half", labels, tipTitles, series, formatValue = String, formatTick = String, integerTicks = false, tableLabel = "Week of", ariaLabel, empty }: {
+  title: string;
+  note?: string;
+  className?: string;
+  labels: string[];
+  tipTitles: string[];
+  series: TrendSeries[];
+  formatValue?: (n: number) => string;
+  formatTick?: (n: number) => string;
+  integerTicks?: boolean;
+  tableLabel?: string;
+  ariaLabel: string;
+  /** When set, shown instead of the plot (e.g. "nothing to chart yet"). */
+  empty?: ReactNode;
+}) {
   const [box, width] = useWidth<HTMLDivElement>();
   const [active, setActive] = useState<number | null>(null);
-  const H = 220, M = { t: 14, r: 14, b: 28, l: 30 };
-  const n = bins.length;
+  const n = labels.length;
+  const H = 220;
+  const M = { t: 14, r: 14, b: 28, l: integerTicks ? 30 : 48 };
   const innerW = Math.max(width - M.l - M.r, 10);
   const innerH = H - M.t - M.b;
-  const step = Math.ceil(Math.max(3, ...bins.map(b => Math.max(b.created, b.completed))) / 3);
-  const yMax = step * 3;
-  const ticks = [0, step, step * 2, step * 3];
+  const ticks = trendTicks(Math.max(0, ...series.flatMap(s => s.values)), integerTicks);
+  const yMax = ticks[3];
   const x = (i: number) => M.l + (n > 1 ? (i * innerW) / (n - 1) : innerW / 2);
   const y = (v: number) => M.t + innerH - (v / yMax) * innerH;
-  const series = [
-    { key: "completed", label: "Completed", color: "var(--series-1)", values: bins.map(b => b.completed) },
-    { key: "created", label: "Created", color: "var(--series-2)", values: bins.map(b => b.created) },
-  ];
   const path = (vals: number[]) => vals.map((v, i) => `${i ? "L" : "M"}${x(i)},${y(v)}`).join(" ");
   const everyOther = innerW / n < 46;
 
@@ -268,45 +293,46 @@ export function ActivityTrendChart({ bins, total }: { bins: WeekBin[]; total: nu
   };
 
   let tip: Tip | null = null;
-  if (active !== null && width > 0) {
-    const top = Math.min(y(bins[active].created), y(bins[active].completed));
+  if (active !== null && width > 0 && active < n) {
+    const ys = series.map(s => y(s.values[active]));
+    const top = Math.min(...ys);
     tip = {
       x: x(active),
-      y: top < 96 ? Math.max(y(bins[active].created), y(bins[active].completed)) : top,
+      y: top < 96 ? Math.max(...ys) : top,
       w: width,
       flip: top < 96,
-      title: `Week of ${weekLabel(bins[active].start)}`,
-      rows: series.map(s => ({ color: s.color, label: s.label.toLowerCase(), value: String(s.values[active]) })),
+      title: tipTitles[active],
+      rows: series.map(s => ({ color: s.color, label: s.label.toLowerCase(), value: formatValue(s.values[active]) })),
     };
   }
 
   return (
     <ChartCard
-      className="viz-half"
-      title="Tasks created vs completed"
-      note="Per week, last 8 weeks"
+      className={className}
+      title={title}
+      note={note}
       legend={<Legend items={series.map(s => ({ label: s.label, color: s.color, line: true }))} />}
       table={(
         <table>
-          <thead><tr><th>Week of</th><th>Created</th><th>Completed</th></tr></thead>
-          <tbody>{bins.map(b => <tr key={b.start}><th scope="row">{weekLabel(b.start)}</th><td>{b.created}</td><td>{b.completed}</td></tr>)}</tbody>
+          <thead><tr><th>{tableLabel}</th>{series.map(s => <th key={s.key}>{s.label}</th>)}</tr></thead>
+          <tbody>{labels.map((l, i) => <tr key={i}><th scope="row">{l}</th>{series.map(s => <td key={s.key}>{formatValue(s.values[i])}</td>)}</tr>)}</tbody>
         </table>
       )}
     >
-      {total === 0 ? (
-        <Empty>No dated activity yet. This fills in as tasks are assigned and moved to Done.</Empty>
+      {empty ? (
+        <Empty>{empty}</Empty>
       ) : (
         <div className="viz-plot viz-line" ref={box} tabIndex={0} onKeyDown={onKey} onFocus={() => setActive(a => a ?? n - 1)} onBlur={() => setActive(null)}>
           {width > 0 && (
-            <svg width={width} height={H} role="img" aria-label={`Tasks created and completed per week, last ${n} weeks`}>
+            <svg width={width} height={H} role="img" aria-label={ariaLabel}>
               {ticks.map(t => (
                 <g key={t}>
                   <line x1={M.l} x2={M.l + innerW} y1={y(t)} y2={y(t)} className={t === 0 ? "viz-axis" : "viz-hairline"} />
-                  <text x={M.l - 8} y={y(t) + 4} textAnchor="end" className="viz-tick">{t}</text>
+                  <text x={M.l - 8} y={y(t) + 4} textAnchor="end" className="viz-tick">{formatTick(t)}</text>
                 </g>
               ))}
-              {bins.map((b, i) => (!everyOther || i % 2 === n % 2 ? (
-                <text key={b.start} x={x(i)} y={H - 8} textAnchor="middle" className="viz-tick">{weekLabel(b.start)}</text>
+              {labels.map((l, i) => (!everyOther || i % 2 === n % 2 ? (
+                <text key={i} x={x(i)} y={H - 8} textAnchor="middle" className="viz-tick">{l}</text>
               ) : null))}
               {active !== null && <line x1={x(active)} x2={x(active)} y1={M.t} y2={M.t + innerH} className="viz-cross" />}
               {series.map(s => (
@@ -332,6 +358,24 @@ export function ActivityTrendChart({ bins, total }: { bins: WeekBin[]; total: nu
         </div>
       )}
     </ChartCard>
+  );
+}
+
+export function ActivityTrendChart({ bins, total }: { bins: WeekBin[]; total: number }) {
+  return (
+    <TrendChart
+      title="Tasks created vs completed"
+      note="Per week, last 8 weeks"
+      labels={bins.map(b => weekLabel(b.start))}
+      tipTitles={bins.map(b => `Week of ${weekLabel(b.start)}`)}
+      series={[
+        { key: "completed", label: "Completed", color: "var(--series-1)", values: bins.map(b => b.completed) },
+        { key: "created", label: "Created", color: "var(--series-2)", values: bins.map(b => b.created) },
+      ]}
+      integerTicks
+      ariaLabel={`Tasks created and completed per week, last ${bins.length} weeks`}
+      empty={total === 0 ? "No dated activity yet. This fills in as tasks are assigned and moved to Done." : undefined}
+    />
   );
 }
 

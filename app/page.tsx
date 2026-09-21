@@ -6,6 +6,8 @@ import type { HqBootstrap, SheetRow } from "@/lib/hq-types";
 import { areaProgress, overallProgress, pipelineCounts, weeklyActivity } from "@/lib/hq-progress";
 import { ProgressPanel } from "./charts";
 import { AppShell, type NavSection } from "./shell";
+import { EdibleScorecard, WeeklyEntryForm } from "./edible";
+import { APP_SHEETS } from "@/lib/hq-schemas";
 
 type View =
   | "home" | "work" | "manage" | "close"
@@ -22,6 +24,7 @@ const emptyData: HqBootstrap = {
   alerts: [], property: [], financeReg: [], personalReg: [],
   requests: [], training: [], systemAccess: [], periods: [], notes: [], activity: [],
   firefliesLegacy: [], ironTasks: [], customSheetDefs: [], customSheets: {},
+  edibleWeekly: [], edibleTargets: [], edibleKsiReview: [],
 };
 
 // ── Feedback layer ───────────────────────────────────────────────────────
@@ -316,13 +319,15 @@ function StatusSummary({ rows, pipeline, statusField = "Status" }: { rows: Sheet
 
 // ── Generic editable data table ───────────────────────────────────────────────
 function EditableDataTable({
-  rows, sheetName, priorityCols, columns, pipeline = WORK_PIPELINE, statusField = "Status", defaults, onUpdate, onAdd, onDelete,
+  rows, sheetName, priorityCols, columns, pipeline = WORK_PIPELINE, statusField = "Status", defaults, maxCols = 8, onUpdate, onAdd, onDelete,
 }: {
   rows: SheetRow[];
   sheetName: string;
   priorityCols?: string[];
   /** Pre-filled values for new rows — used when the table is filtered (e.g. to one business) so a new row doesn't vanish from the view it was added in. */
   defaults?: Record<string, string>;
+  /** How many columns to show (default 8). Wide sheets scroll sideways. */
+  maxCols?: number;
   /** Explicit header list — needed for a brand-new sheet with zero rows yet, since headers can't be inferred from data. */
   columns?: string[];
   pipeline?: Pipeline;
@@ -342,7 +347,7 @@ function EditableDataTable({
   const headers = priorityCols
     ? [...priorityCols.filter(h => allHeaders.includes(h)), ...allHeaders.filter(h => !priorityCols.includes(h))]
     : allHeaders;
-  const showCols = headers.slice(0, 8);
+  const showCols = headers.slice(0, maxCols);
 
   const startEdit = (idx: number) => {
     setEditingIdx(idx);
@@ -459,7 +464,7 @@ function EditableDataTable({
         </table>
       </div>
       <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 12 }}>
-        <p className="sub" style={{ margin: 0 }}>{rows.length} record{rows.length !== 1 ? "s" : ""}{headers.length > 8 ? ` · ${headers.length - 8} more columns hidden` : ""}</p>
+        <p className="sub" style={{ margin: 0 }}>{rows.length} record{rows.length !== 1 ? "s" : ""}{headers.length > maxCols ? ` · ${headers.length - maxCols} more columns hidden` : ""}</p>
         {!adding && <button className="btn" style={{ fontSize: "0.78rem", padding: "3px 10px" }} onClick={() => { setNewRow({ ...defaults }); setAdding(true); }}>＋ Add row</button>}
       </div>
     </div>
@@ -1199,8 +1204,8 @@ export default function HomePage() {
   ];
 
   // Helpers for editable tables
-  const edt = (sheet: string, rows: SheetRow[], priorityCols?: string[], columns?: string[], pipeline?: Pipeline, statusField?: string, defaults?: Record<string, string>) => (
-    <EditableDataTable rows={rows} sheetName={sheet} priorityCols={priorityCols} columns={columns} pipeline={pipeline} statusField={statusField} defaults={defaults} onUpdate={updateAnyRow} onAdd={addAnyRow} onDelete={deleteAnyRow} />
+  const edt = (sheet: string, rows: SheetRow[], priorityCols?: string[], columns?: string[], pipeline?: Pipeline, statusField?: string, defaults?: Record<string, string>, maxCols?: number) => (
+    <EditableDataTable rows={rows} sheetName={sheet} priorityCols={priorityCols} columns={columns} pipeline={pipeline} statusField={statusField} defaults={defaults} maxCols={maxCols} onUpdate={updateAnyRow} onAdd={addAnyRow} onDelete={deleteAnyRow} />
   );
 
   // Board/list Work Items view shared by the areas that don't have their own
@@ -1482,7 +1487,34 @@ export default function HomePage() {
     );
   }
 
+  // Edible - Store: the weekly-report scorecard, plus the sheets that feed it.
+  function edibleKpiTab() {
+    const cols = (sheet: string) => APP_SHEETS[sheet];
+    return (
+      <>
+        <EdibleScorecard weekly={data.edibleWeekly} targets={data.edibleTargets} ksiReview={data.edibleKsiReview} />
+        <Section title="Add a week">
+          <WeeklyEntryForm
+            existing={data.edibleWeekly}
+            onInvalid={message => notify(message, "error")}
+            onAdd={row => addAnyRow("HQ_EDIBLE_WEEKLY", row, `Week ending ${row["Week Ending"]} added`)}
+          />
+        </Section>
+        <Section title="Weekly numbers">
+          {edt("HQ_EDIBLE_WEEKLY", data.edibleWeekly, cols("HQ_EDIBLE_WEEKLY"), cols("HQ_EDIBLE_WEEKLY"), undefined, undefined, undefined, cols("HQ_EDIBLE_WEEKLY").length)}
+        </Section>
+        <Section title="Targets &amp; definitions">
+          {edt("HQ_EDIBLE_TARGETS", data.edibleTargets, cols("HQ_EDIBLE_TARGETS"), cols("HQ_EDIBLE_TARGETS"), undefined, undefined, undefined, cols("HQ_EDIBLE_TARGETS").length)}
+        </Section>
+        <Section title="Monthly KSI review">
+          {edt("HQ_EDIBLE_KSI_REVIEW", data.edibleKsiReview, cols("HQ_EDIBLE_KSI_REVIEW"), cols("HQ_EDIBLE_KSI_REVIEW"), undefined, undefined, undefined, cols("HQ_EDIBLE_KSI_REVIEW").length)}
+        </Section>
+      </>
+    );
+  }
+
   function areaKpiTab(viewId: string, cfg: AreaPage) {
+    if (viewId === "store") return edibleKpiTab();
     const s = taskStats(areaTasks(viewId));
     const spotlight = areaSpotlight(viewId, cfg);
     return (
@@ -1846,4 +1878,5 @@ const sheetToKey: Record<string, string> = {
   HQ_TRAINING: "training", HQ_SYSTEM_ACCESS: "systemAccess",
   HQ_PERIODS: "periods", HQ_NOTES: "notes", HQ_ACTIVITY: "activity",
   HQ_FIREFLIES_LEGACY: "firefliesLegacy",
+  HQ_EDIBLE_WEEKLY: "edibleWeekly", HQ_EDIBLE_TARGETS: "edibleTargets", HQ_EDIBLE_KSI_REVIEW: "edibleKsiReview",
 };

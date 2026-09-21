@@ -33,6 +33,10 @@ export type HqBootstrap = {
   activity: SheetRow[];
   firefliesLegacy: SheetRow[];
   ironTasks: SheetRow[];
+  // Edible Hackensack weekly-report sheets (see lib/hq-schemas.ts)
+  edibleWeekly: SheetRow[];
+  edibleTargets: SheetRow[];
+  edibleKsiReview: SheetRow[];
   // Sheets created at runtime via "+ New Register" — not known at compile
   // time, so their data lives in a lookup keyed by sheet name instead of a
   // fixed field here.
