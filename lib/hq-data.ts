@@ -1,6 +1,4 @@
-import { google } from "googleapis";
 import type { HqBootstrap, SheetRow, HqUser } from "./hq-types";
-import { getOAuthClient, getValidClient } from "./hq-auth";
 import { periodInfo } from "./hq-period";
 
 const demoWork: SheetRow[] = [
@@ -327,77 +325,6 @@ export async function appendAnyRow(sheetName: string, obj: Record<string, string
   await sheets.spreadsheets.values.append({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${sheetName}!A:Z`, valueInputOption: "USER_ENTERED", requestBody: { values: [row] } });
   invalidateBootstrapCache();
   return { ok: true, source: "sheets" as const };
-}
-
-// Update row based on matching a specific column index (0-based)
-export async function updateRowByColumn(sheetName: string, idHeaderRow: number, lastCol: string, matchColIndex: number, matchValue: string, updates: Record<string, string>) {
-  if (await isDemoData()) return { ok: true, source: "demo" as const };
-  const sheets = await getSheets();
-  const raw = await sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${sheetName}!A1:${lastCol}` });
-  const rows = raw.data.values ?? [];
-  if (!rows || rows.length < idHeaderRow) throw new Error("Header not found");
-
-  const headers = rows[idHeaderRow - 1] as string[];
-  const rowIndex = rows.findIndex((r, idx) => idx >= idHeaderRow && String(r[matchColIndex] || "") === matchValue);
-  if (rowIndex === -1) return { ok: false, error: "Row not found" };
-
-  const targetRow = rows[rowIndex];
-  const newRow = [...targetRow];
-
-  for (const [key, val] of Object.entries(updates)) {
-    const colIndex = headers.indexOf(key);
-    if (colIndex > -1) {
-      newRow[colIndex] = val;
-    }
-  }
-
-  const range = `${sheetName}!A${rowIndex + 1}:${lastCol}${rowIndex + 1}`;
-  await sheets.spreadsheets.values.update({
-    spreadsheetId: process.env.GOOGLE_SHEETS_ID, range, valueInputOption: "USER_ENTERED", requestBody: { values: [newRow] }
-  });
-
-  invalidateBootstrapCache();
-  return { ok: true, source: "sheets" as const, row: newRow };
-}
-
-export async function recalcChecklistRun(runId: string) {
-  if (await isDemoData()) return;
-  const s = (name: string) => readSheet(name, 1, "Z").catch(() => []);
-  const [runs, notes, items] = await Promise.all([
-    s("HQ_CHECKLIST_RUNS"),
-    s("HQ_NOTES"),
-    s("HQ_CHECKLIST_ITEMS"),
-  ]);
-
-  const runIndex = runs.findIndex(r => r["Run ID"] === runId);
-  if (runIndex === -1) return;
-  const run = runs[runIndex];
-
-  const relevantNotes = notes.filter(n => n["Source Type"] === "Checklist Item" && String(n["Source ID"] || "").startsWith(runId + "|"));
-  const relevantItems = items.filter(i => i["Checklist ID"] === run["Checklist ID"]);
-  const requiredCount = relevantItems.filter(i => /yes/i.test(i["Required?"] || "")).length;
-
-  let exceptions = 0;
-  let completedItems = 0;
-
-  relevantNotes.forEach(n => {
-    try {
-      const state = JSON.parse(n.Note);
-      if (state.status === "Complete") completedItems++;
-      if (state.status === "Exception") exceptions++;
-    } catch (e) { }
-  });
-
-  const completionPct = requiredCount > 0 ? (completedItems / requiredCount) : (completedItems > 0 ? 1 : 0);
-  const status = completionPct >= 1 ? "Complete" : (completedItems > 0 ? "In Progress" : "Not Started");
-
-  await saveAnyRow("HQ_CHECKLIST_RUNS", runId, {
-    "Completed Items": String(completedItems),
-    "Completion %": String(completionPct),
-    "Exceptions": String(exceptions),
-    "Status": status,
-    "Last Update": new Date().toISOString(),
-  });
 }
 
 const EMPTY: SheetRow[] = [];

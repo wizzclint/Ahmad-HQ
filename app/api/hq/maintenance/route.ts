@@ -2,7 +2,7 @@ import { getServerSession } from "next-auth/next";
 import { authOptions } from "@/app/api/auth/[...nextauth]/route";
 import { generateExpectedRuns } from "@/lib/hq-data";
 
-export async function POST(request: Request) {
+export async function POST() {
     try {
         const session = await getServerSession(authOptions);
         const user = session?.user;

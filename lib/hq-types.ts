@@ -50,13 +50,3 @@ export type HqUser = {
   canSeeAll: boolean;
   authorized: boolean;
 };
-
-export const functions = [
-  "Edible Operations",
-
-  "Gardenia's Fire",
-  "Finance & Office",
-  "People / Systems",
-  "Podcast / Legacy",
-  "Ahmad Personal Finance / Life",
-];

@@ -34,7 +34,7 @@ export async function saveTokens(tokens: OAuthTokens): Promise<void> {
   cachedClient = null; // new credentials (e.g. a fresh sign-in) must not be shadowed by the old cached client
   try {
     await fs.writeFile(TOKENS_PATH, JSON.stringify(tokens, null, 2), "utf-8");
-  } catch (error) {
+  } catch {
     // Vercel serverless functions have a read-only filesystem.
     // It's safe to ignore this because we rely on GOOGLE_REFRESH_TOKEN in production.
     console.warn("Could not save tokens to filesystem (likely serverless environment).");
@@ -92,12 +92,4 @@ export function getValidClient() {
   // Concurrent callers share one refresh instead of each starting their own.
   clientInFlight ??= buildClient().finally(() => { clientInFlight = null; });
   return clientInFlight;
-}
-
-export function hasOAuthConfig(): boolean {
-  return Boolean(
-    process.env.GOOGLE_CLIENT_ID &&
-    process.env.GOOGLE_CLIENT_SECRET &&
-    process.env.GOOGLE_SHEETS_ID,
-  );
 }

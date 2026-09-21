@@ -42,3 +42,6 @@ next-env.d.ts
 tokens.json
 AGENTS.md
 CLAUDE.md
+
+# local snapshots of the live workbook — real business data, keep out of the repo
+/docs/*.xlsx

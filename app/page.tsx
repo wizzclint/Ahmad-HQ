@@ -3,13 +3,12 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useSession, signIn, signOut } from "next-auth/react";
 import type { HqBootstrap, SheetRow } from "@/lib/hq-types";
-import { functions } from "@/lib/hq-types";
 import { areaProgress, overallProgress, pipelineCounts, weeklyActivity } from "@/lib/hq-progress";
 import { ProgressPanel } from "./charts";
 import { AppShell, type NavSection } from "./shell";
 
 type View =
-  | "home" | "work" | "operate" | "manage" | "close" | "intel"
+  | "home" | "work" | "manage" | "close" | "intel"
   | "customers" | "decisions" | "add"
   | "store" | "gardenia" | "finance"
   | "property" | "people" | "personal" | "iron"
@@ -915,7 +914,6 @@ export default function HomePage() {
   const { data: session, status } = useSession();
   const [data, setData] = useState(emptyData);
   const [view, setView] = useState<View>("home");
-  const [selectedFunction, setSelectedFunction] = useState(functions[0]);
   const [selectedCustomSheet, setSelectedCustomSheet] = useState<string>("");
   const [workBoardView, setWorkBoardView] = useState(true);
   const [backlogBoardView, setBacklogBoardView] = useState(true);
@@ -973,9 +971,7 @@ export default function HomePage() {
     return data.work.filter(r => selected.match.some(m => String(r["Project / Function"] || "").toLowerCase().includes(m)));
   }, [data.work, view]);
 
-  const visibleWork = view === "operate"
-    ? data.work.filter(r => r["Project / Function"] === selectedFunction)
-    : areaRows;
+  const visibleWork = areaRows;
 
   // Network wrapper: a dropped connection becomes `null` instead of a thrown TypeError.
   const call = (url: string, init: RequestInit) => fetch(url, init).catch(() => null);
@@ -1588,16 +1584,6 @@ export default function HomePage() {
               data.work.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />)
             )}
           </section>
-        </>
-      );
-
-      case "operate": return (
-        <>
-          <Header title="Operate" subtitle="Function / project drill-down" data={data} />
-          <div className="chips area-switcher">
-            {functions.map(name => <button className={`chip ${selectedFunction === name ? "selected" : ""}`} onClick={() => setSelectedFunction(name)} key={name}>{name}</button>)}
-          </div>
-          <section className="card">{visibleWork.map(r => <WorkRow row={r} onSave={saveRow} onDelete={deleteWorkItem} key={r.ID} />)}</section>
         </>
       );
 
