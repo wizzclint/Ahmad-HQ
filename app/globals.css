@@ -107,3 +107,6 @@
 @media(max-width:1000px){.viz-hero,.viz-wide,.viz-half{grid-column:span 6}}
 @media(max-width:560px){.viz-row{grid-template-columns:96px 1fr}.viz-row-value{grid-column:1/-1;padding-left:106px;margin-top:-4px}.viz-row-bar{grid-template-columns:96px 1fr}}
 @media(prefers-reduced-motion:reduce){.viz-meter>span{transition:none}}
+.kpis.kpis-5{grid-template-columns:repeat(5,1fr)}
+@media(max-width:1000px){.kpis.kpis-5{grid-template-columns:repeat(3,1fr)}}
+@media(max-width:800px){.kpis.kpis-5{grid-template-columns:1fr}}

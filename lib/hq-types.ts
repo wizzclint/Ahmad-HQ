@@ -13,8 +13,6 @@ export type HqBootstrap = {
   customerIssues: SheetRow[];
   customerFollowup: SheetRow[];
   reviews: SheetRow[];
-  decisions: SheetRow[];
-  exceptions: SheetRow[];
   plans: SheetRow[];
   people: SheetRow[];
   ksi: SheetRow[];

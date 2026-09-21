@@ -397,7 +397,7 @@ function filterBootstrapForUser(raw: HqBootstrap, user: HqUser): HqBootstrap {
 const STANDARD_SHEETS: [keyof HqBootstrap, string][] = [
   ["targets", "HQ_TARGETS"], ["budgets", "HQ_BUDGETS"], ["customers", "HQ_CUSTOMERS"],
   ["customerIssues", "HQ_CUSTOMER_ISSUES"], ["customerFollowup", "HQ_CUSTOMER_FOLLOWUP"],
-  ["reviews", "HQ_REVIEWS"], ["decisions", "HQ_DECISIONS"], ["exceptions", "HQ_EXCEPTIONS"],
+  ["reviews", "HQ_REVIEWS"],
   ["plans", "HQ_PLANS"], ["people", "HQ_PEOPLE"], ["ksi", "HQ_KSI"],
   ["gardeniaPipeline", "HQ_GARDENIA_PIPELINE"], ["gardeniaProduct", "HQ_GARDENIA_PRODUCT"], ["gardeniaTasks", "HQ_GARDENIA_TASKS"],
   ["checklistDefs", "HQ_CHECKLIST_DEFS"], ["checklistRuns", "HQ_CHECKLIST_RUNS"],
@@ -470,7 +470,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
       work: demoWork, controls: demoControls,
       user: "Demo workspace", generatedAt: new Date().toISOString(), source: "demo",
       targets: EMPTY, budgets: EMPTY, customers: EMPTY, customerIssues: EMPTY,
-      customerFollowup: EMPTY, reviews: EMPTY, decisions: EMPTY, exceptions: EMPTY,
+      customerFollowup: EMPTY, reviews: EMPTY,
       plans: EMPTY, people: EMPTY, ksi: EMPTY, gardeniaPipeline: EMPTY,
       gardeniaProduct: EMPTY, gardeniaTasks: EMPTY, checklistDefs: EMPTY, checklistRuns: EMPTY,
       alerts: EMPTY, property: EMPTY, financeReg: EMPTY,

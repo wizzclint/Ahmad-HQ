@@ -8,8 +8,8 @@ import { ProgressPanel } from "./charts";
 import { AppShell, type NavSection } from "./shell";
 
 type View =
-  | "home" | "work" | "manage" | "close" | "intel"
-  | "customers" | "decisions" | "add"
+  | "home" | "work" | "manage" | "close"
+  | "add"
   | "store" | "gardenia" | "finance"
   | "property" | "people" | "personal" | "iron"
   | "firefliesLegacy" | "custom" | "newSheet";
@@ -17,7 +17,7 @@ type View =
 const emptyData: HqBootstrap = {
   work: [], controls: [], user: "", generatedAt: "", source: "demo",
   targets: [], budgets: [], customers: [], customerIssues: [], customerFollowup: [],
-  reviews: [], decisions: [], exceptions: [], plans: [], people: [], ksi: [],
+  reviews: [], plans: [], people: [], ksi: [],
   gardeniaPipeline: [], gardeniaProduct: [], gardeniaTasks: [], checklistDefs: [], checklistRuns: [],
   alerts: [], property: [], financeReg: [], personalReg: [],
   requests: [], training: [], systemAccess: [], periods: [], notes: [], activity: [],
@@ -773,12 +773,12 @@ const guideSteps: { title: string; body: string }[] = [
     body: "Each business area — Edible, Gardenia's Fire, Finance & Office, Property, People & Systems, Personal/Ahmad, Iron Marks — has its own tab. Opening one shows only that area's work items plus the registers specific to it (e.g. Finance & Office shows the Finance Register; Gardenia's Fire shows its Sales Pipeline). Use these when you want to focus on one part of the business instead of everything at once.",
   },
   {
-    title: "Close / Review and Intelligence",
-    body: "CLOSE / REVIEW is where weekly controls get signed off and checklists get run — this is the accountability layer: did the recurring things that must happen, actually happen? INTELLIGENCE is the numbers view — Key Status Indicators, targets, and budgets — for tracking performance over time rather than individual tasks.",
+    title: "Close / Review",
+    body: "CLOSE / REVIEW is where weekly controls get signed off and checklists get run — this is the accountability layer: did the recurring things that must happen, actually happen? Each area's KPIs tab shows that business's Key Status Indicators and targets.",
   },
   {
     title: "Quick actions",
-    body: "Under QUICK in the sidebar: \"Capture / Inbox\" is the fastest way to turn a thought or request into a tracked work item — use it the moment something comes up so it doesn't get lost. Customers and Decisions are dedicated views for customer relationship data and logged decisions/exceptions. You're all set — click below to start using the system.",
+    body: "Under QUICK in the sidebar: \"Capture / Inbox\" is the fastest way to turn a thought or request into a tracked work item — use it the moment something comes up so it doesn't get lost. You're all set — click below to start using the system.",
   },
 ];
 
@@ -835,13 +835,12 @@ function Home({ data, onSave, onDelete }: { data: HqBootstrap; onSave: (u: Sheet
   return (
     <>
       <Header title="Management Home" subtitle="What matters, what changed, what needs attention." data={data} />
-      <section className="kpis">
+      <section className="kpis kpis-5">
         <Kpi label="Open work" value={open.length} detail="Current execution queue" tone="sage" />
         <Kpi label="Critical moves" value={critical.length} detail="Result-producing focus" tone="blue" />
         <Kpi label="Blocked" value={blocked.length} detail="Needs unblocking" tone="yellow" />
         <Kpi label="Escalated" value={escalated.length} detail="Needs management attention" tone="lav" />
         <Kpi label="Open alerts" value={openAlerts.length} detail="Active system alerts" tone="peach" />
-        <Kpi label="Exceptions" value={data.exceptions.filter(r => !/closed/i.test(r.Status || "")).length} detail="Open exceptions" tone="mint" />
       </section>
       <ProgressPanel overall={overall} areas={progressAreas} funnel={pipelineCounts(data.gardeniaPipeline)} weekly={weeklyActivity(data)} />
       <div className="dashboard-grid">
@@ -1195,7 +1194,7 @@ export default function HomePage() {
   const mainNav: [View, string, string][] = [
     ["home", "HOME", "▣"], ["work", "MY WORK", "✓"], ["manage", "MANAGE", "◎"],
     ...areas.map(a => [a.id, a.label, a.icon] as [View, string, string]),
-    ["close", "CLOSE / REVIEW", "✓"], ["intel", "INTELLIGENCE", "⌁"],
+    ["close", "CLOSE / REVIEW", "✓"],
     ["firefliesLegacy", "FIREFLIES & LEGACY", "⚙"],
   ];
 
@@ -1607,33 +1606,6 @@ export default function HomePage() {
         </>
       );
 
-      case "intel": return (
-        <>
-          <Header title="Intelligence" subtitle="KSIs, targets, budgets and performance" data={data} />
-          <Section title="Key Status Indicators">{edt("HQ_KSI", data.ksi, ["Business / Area", "Metric / Indicator", "Current", "Status", "Threshold / Target", "Direction", "Owner"])}</Section>
-          <Section title="Targets">{edt("HQ_TARGETS", data.targets, ["Business", "Metric", "Target", "Actual", "Variance", "Variance %", "YoY %", "Owner"])}</Section>
-          <Section title="Budgets">{edt("HQ_BUDGETS", data.budgets, ["Year", "Month", "Business", "Revenue Budget", "Gross Profit Budget", "Net Profit Budget", "Owner"])}</Section>
-        </>
-      );
-
-      case "customers": return (
-        <>
-          <Header title="Customers" subtitle="Customers, issues, follow-ups and reviews" data={data} />
-          <Section title="Customers">{edt("HQ_CUSTOMERS", data.customers, ["Date", "Business", "Customer", "Type", "Revenue", "Relationship Stage", "Next Action", "Owner"])}</Section>
-          <Section title="Customer Issues">{edt("HQ_CUSTOMER_ISSUES", data.customerIssues, ["Date", "Business", "Issue Type", "Customer", "Severity", "Recovery / Action", "Status", "Owner"])}</Section>
-          <Section title="Customer Follow-ups">{edt("HQ_CUSTOMER_FOLLOWUP", data.customerFollowup, ["Follow-up ID", "Business", "Customer / Recipient", "Priority", "Due", "Status", "Next Action", "Owner"])}</Section>
-          <Section title="Reviews">{edt("HQ_REVIEWS", data.reviews, ["Date", "Business", "Platform", "Rating", "Theme", "Severity", "Response Status", "Owner"])}</Section>
-        </>
-      );
-
-      case "decisions": return (
-        <>
-          <Header title="Decisions" subtitle="Decisions made and open exceptions" data={data} />
-          <Section title="Decisions">{edt("HQ_DECISIONS", data.decisions, ["Decision ID", "Date", "Business / Area", "Decision", "Owner", "Status", "Due", "Result / Follow-up"])}</Section>
-          <Section title="Exceptions">{edt("HQ_EXCEPTIONS", data.exceptions, ["Exception ID", "Date", "Business / Area", "Exception", "Severity", "Owner", "Status", "Due"])}</Section>
-        </>
-      );
-
       case "store":
       case "gardenia":
       case "finance":
@@ -1818,7 +1790,7 @@ export default function HomePage() {
   };
 
   const quickNav: [View, string, string][] = [
-    ["add", "Capture / Inbox", "＋"], ["customers", "Customers", "⌕"], ["decisions", "Decisions", "◆"], ["newSheet", "New Register", "▦"],
+    ["add", "Capture / Inbox", "＋"], ["newSheet", "New Register", "▦"],
   ];
   const navSections: NavSection[] = [
     { label: "MAIN", items: mainNav.map(([id, label, icon]) => ({ id, label, icon, active: view === id, onSelect: () => nav(id) })) },
@@ -1863,7 +1835,7 @@ export default function HomePage() {
 const sheetToKey: Record<string, string> = {
   HQ_TARGETS: "targets", HQ_BUDGETS: "budgets", HQ_CUSTOMERS: "customers",
   HQ_CUSTOMER_ISSUES: "customerIssues", HQ_CUSTOMER_FOLLOWUP: "customerFollowup",
-  HQ_REVIEWS: "reviews", HQ_DECISIONS: "decisions", HQ_EXCEPTIONS: "exceptions",
+  HQ_REVIEWS: "reviews",
   HQ_PLANS: "plans", HQ_PEOPLE: "people", HQ_KSI: "ksi",
   HQ_GARDENIA_PIPELINE: "gardeniaPipeline", HQ_GARDENIA_PRODUCT: "gardeniaProduct",
   HQ_GARDENIA_TASKS: "gardeniaTasks", HQ_IRONMARK_TASKS: "ironTasks",
