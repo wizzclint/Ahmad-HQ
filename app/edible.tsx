@@ -128,8 +128,8 @@ function KsiReview({ rows }: { rows: SheetRow[] }) {
 }
 
 // One row per week, raw inputs only — the scorecard derives the rest, so nobody types a percentage.
-const WEEK_FIELDS: { name: string; label: string; required?: boolean; kind?: "date" | "text" }[] = [
-  { name: "Week Ending", label: "Week ending", kind: "date", required: true },
+const WEEK_FIELDS: { name: string; label: string; required?: boolean; kind?: "date" | "text"; hint?: string }[] = [
+  { name: "Week Ending", label: "Week ending", kind: "date", required: true, hint: "Tap the box to open a calendar — this form is for a NEW week only. To fix a week that's already listed, use Edit in the “Weekly numbers” table below instead." },
   { name: "Net Sales", label: "Net sales ($)", required: true },
   { name: "Sales Target", label: "Sales target ($)" },
   { name: "Same Week LY Sales", label: "Same week last year ($)" },
@@ -160,7 +160,7 @@ export function WeeklyEntryForm({ existing, onAdd, onInvalid }: {
     const week = parseDate(values["Week Ending"]);
     if (!week) return onInvalid("Choose the week-ending date.");
     if (weeklySeries(existing).some(w => w.weekEnding.getTime() === week.getTime())) {
-      return onInvalid(`Week ending ${dateLabelYear(week)} is already entered. Edit it in the table below.`);
+      return onInvalid(`Week ending ${dateLabelYear(week)} is already entered — this form only adds a new week. Scroll down to “Weekly numbers” below and press Edit on that row to change its numbers.`);
     }
     for (const f of WEEK_FIELDS) {
       const v = (values[f.name] || "").trim();
@@ -185,7 +185,7 @@ export function WeeklyEntryForm({ existing, onAdd, onInvalid }: {
     <form className="form-grid" onSubmit={submit}>
       {WEEK_FIELDS.map(f => (
         <label key={f.name} className={f.kind === "text" ? "full" : undefined}>
-          {f.label}
+          <span>{f.label}{f.required && <span aria-hidden="true"> *</span>}</span>
           <input
             type={f.kind === "date" ? "date" : "text"}
             inputMode={f.kind ? undefined : "decimal"}
@@ -194,8 +194,10 @@ export function WeeklyEntryForm({ existing, onAdd, onInvalid }: {
             required={f.required}
             placeholder={f.kind ? undefined : "0"}
           />
+          {f.hint && <small className="sub">{f.hint}</small>}
         </label>
       ))}
+      <p className="sub full" style={{ margin: "-4px 0 0" }}>* Required. Everything else can be filled in later.</p>
       <button className={`btn primary${saving ? " is-pending" : ""}`} type="submit" disabled={saving} aria-busy={saving}>
         {saving && <span className="spinner" aria-hidden="true" />}
         {saving ? "Adding…" : "Add week"}
