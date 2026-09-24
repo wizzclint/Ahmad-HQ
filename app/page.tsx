@@ -6,7 +6,7 @@ import type { HqBootstrap, SheetRow } from "@/lib/hq-types";
 import { areaProgress, overallProgress, pipelineCounts, weeklyActivity } from "@/lib/hq-progress";
 import { ProgressPanel } from "./charts";
 import { AppShell, type NavSection } from "./shell";
-import { EdibleScorecard } from "./edible";
+import { CloseTheWeek, EdibleScorecard, EdibleWorkspace, StoreHealth, type NewAction } from "./edible";
 import { APP_SHEETS } from "@/lib/hq-schemas";
 
 type View =
@@ -1175,7 +1175,7 @@ export default function HomePage() {
       try {
         await addAnyRow("HQ_ACTIVITY", {
           Timestamp: new Date().toISOString(),
-          User: "Ahmad",
+          User: session?.user?.name || "Ahmad",
           "Action Type": "Task Assigned",
           "Business / Area": route.label,
           "Source Type": destSheet,
@@ -1189,6 +1189,39 @@ export default function HomePage() {
     } finally {
       setAssigning(false);
     }
+  }
+
+  // An action for the Edible store, made from the KPI pages: an ordinary work item, tagged with the number it answers
+  // (in its "why" cell) so it shows up under that number. Throws on failure so the dialog stays open.
+  async function createEdibleAction(a: NewAction) {
+    const row: SheetRow = {
+      "Project / Function": "Edible Operations",
+      "Work Item / Next Action": a.description,
+      Owner: a.owner,
+      "Due Date": a.due,
+      Type: a.kpiLabel ? "Improvement" : "Action",
+      "Management Escalation?": a.escalate ? "Yes" : "No",
+      "WHY / OUTCOME SUPPORTED": a.why,
+    };
+    const res = await tracked(() => call("/api/hq", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(row) }));
+    const payload = await res?.json().catch(() => null);
+    if (!res || !res.ok || !payload?.id) {
+      notify("The action could not be saved — please try again.", "error");
+      throw new Error("Save failed");
+    }
+    setData(cur => ({ ...cur, work: [{ ...row, ID: payload.id, Priority: "PUSH", Status: "Open", "Blocked?": "No", "Critical Move?": "No" }, ...cur.work] }));
+    try {
+      await addAnyRow("HQ_ACTIVITY", {
+        Timestamp: new Date().toISOString(),
+        User: session?.user?.name || "Ahmad",
+        "Action Type": "Task Assigned",
+        "Business / Area": "Edible",
+        "Source Type": "HQ_WORK",
+        "Source ID": payload.id,
+        Detail: `${a.description} → ${a.owner}`,
+      }, null);
+    } catch { /* history log is best-effort */ }
+    notify(`Action added for ${a.owner}`);
   }
 
   const nav = (v: View) => {
@@ -1296,12 +1329,14 @@ export default function HomePage() {
     }
     if (viewId === "store") {
       const runs = data.checklistRuns.filter(r => cfg.business.test(r.Business || ""));
-      const completion = avg(runs.map(r => parseFloat(r["Completion %"])).filter(n => !Number.isNaN(n)));
+      // Only checklists someone has started count: a run that was scheduled but never opened isn't 0% "done", it's not in use yet.
+      const started = runs.filter(r => !/not started/i.test(r.Status || ""));
+      const completion = avg(started.map(r => parseFloat(r["Completion %"])).filter(n => !Number.isNaN(n)));
       const onTime = runs.filter(r => /yes/i.test(r["On Time?"] || "")).length;
       const ratings = data.reviews.filter(r => cfg.business.test(r.Business || "")).map(r => parseFloat(r.Rating)).filter(n => !Number.isNaN(n));
       const rating = avg(ratings);
       return [
-        { label: "Checklist completion", value: completion === null ? "—" : `${Math.round(completion)}%`, detail: `${runs.length} runs · ${onTime} on time`, tone: "sage" },
+        { label: "Checklist completion", value: completion === null ? "—" : `${Math.round(completion)}%`, detail: started.length ? `${started.length} of ${runs.length} runs started · ${onTime} on time` : `${runs.length} scheduled, none started yet`, tone: "sage" },
         { label: "Avg review rating", value: rating === null ? "—" : rating.toFixed(1), detail: `${ratings.length} reviews`, tone: "lav" },
       ];
     }
@@ -1321,6 +1356,7 @@ export default function HomePage() {
     const assigned = data.activity.filter(r => r["Action Type"] === "Task Assigned" && cfg.business.test(r["Business / Area"] || "")).sort(byTimestampDesc).slice(0, 5);
     return (
       <>
+        {viewId === "store" && <StoreHealth onOpenKpis={() => setAreaTab(cur => ({ ...cur, store: "kpi" }))} />}
         <section className="kpis">
           <Kpi label="Open tasks" value={s.open.length} detail={`${s.total} total`} tone="sage" />
           <Kpi label="In progress" value={s.inProgress.length} detail="Being worked on now" tone="blue" />
@@ -1452,25 +1488,30 @@ export default function HomePage() {
     const wraps = data.notes
       .filter(n => n["Source Type"] === "WEEKLY CLOSE" && cfg.business.test(n["Business / Area"] || ""))
       .sort(byTimestampDesc);
-    const saveWrapUp = async (note: string) => {
+    // `weekKey` is the week being closed; the generic form closes the current calendar week.
+    const saveWrapUp = async (note: string, weekKey = wk) => {
       await addAnyRow("HQ_NOTES", {
         Timestamp: new Date().toISOString(),
         "Business / Area": cfg.label,
         "Source Type": "WEEKLY CLOSE",
-        "Source ID": wk,
+        "Source ID": weekKey,
         Note: note,
         Author: session?.user?.name || "Ahmad",
-      }, `${wk} wrap-up saved for ${cfg.label}`);
+      }, `${weekKey} wrap-up saved for ${cfg.label}`);
     };
+    const isStore = cfg.captureKey === "edible";
     return (
       <>
+        {isStore && <CloseTheWeek wraps={wraps} onSave={saveWrapUp} />}
         <Section title="Checklists for this business">
           {areaTable("HQ_CHECKLIST_RUNS", data.checklistRuns, belongs, ["Checklist Name", "Period Key", "Status", "Completion %", "On Time?", "Owner"], { Business: cfg.label })}
           <p className="sub" style={{ marginBottom: 0 }}>{runs.length} run{runs.length === 1 ? "" : "s"} recorded. Use “Run Maintenance” in the sidebar to generate the missing daily/weekly checklists.</p>
         </Section>
-        <Section title={`Weekly wrap-up · ${wk}`}>
-          <WeeklyWrapUpForm weekKey={wk} onSave={saveWrapUp} />
-        </Section>
+        {!isStore && (
+          <Section title={`Weekly wrap-up · ${wk}`}>
+            <WeeklyWrapUpForm weekKey={wk} onSave={saveWrapUp} />
+          </Section>
+        )}
         <Section title="Past wrap-ups">
           {wraps.length ? wraps.map(w => (
             <article className="wrapup" key={w.Timestamp}>
@@ -1493,12 +1534,8 @@ export default function HomePage() {
     return (
       <>
         <EdibleScorecard
-          weekly={data.edibleWeekly}
-          targets={data.edibleTargets}
           ksiReview={data.edibleKsiReview}
-          onAdd={row => addAnyRow("HQ_EDIBLE_WEEKLY", row, `Week ending ${row["Week Ending"]} added`)}
-          onUpdate={(id, changes) => updateAnyRow("HQ_EDIBLE_WEEKLY", id, changes, "Week updated")}
-          onDelete={id => deleteAnyRow("HQ_EDIBLE_WEEKLY", id, "Week deleted")}
+          renderAction={row => <WorkRow row={row} onSave={saveRow} onDelete={deleteWorkItem} />}
         />
         <Section title="Targets &amp; definitions">
           {edt("HQ_EDIBLE_TARGETS", data.edibleTargets, cols("HQ_EDIBLE_TARGETS"), cols("HQ_EDIBLE_TARGETS"), undefined, undefined, undefined, cols("HQ_EDIBLE_TARGETS").length)}
@@ -1566,7 +1603,7 @@ export default function HomePage() {
   function renderAreaPage(viewId: string) {
     const cfg = AREA_PAGES[viewId];
     const tab = cfg.tabs.some(t => t.id === areaTab[viewId]) ? areaTab[viewId] : "summary";
-    return (
+    const page = (
       <>
         <Header title={cfg.title} subtitle={cfg.subtitle} data={data} />
         <div className="chips area-switcher">
@@ -1576,6 +1613,23 @@ export default function HomePage() {
         </div>
         {renderAreaTab(viewId, cfg, tab)}
       </>
+    );
+    if (viewId !== "store") return page;
+    // Edible - Store: its tabs share one workspace (the weeks, targets, open actions and the add/edit dialogs).
+    const owners = [...new Set([...data.work.map(r => r.Owner), ...data.people.map(p => p.Name)].map(s => (s || "").trim()).filter(Boolean))].sort();
+    return (
+      <EdibleWorkspace
+        weekly={data.edibleWeekly}
+        targets={data.edibleTargets}
+        workRows={visibleWork}
+        owners={owners}
+        onAddWeek={row => addAnyRow("HQ_EDIBLE_WEEKLY", row, `Week ending ${row["Week Ending"]} added`)}
+        onUpdateWeek={(id, changes) => updateAnyRow("HQ_EDIBLE_WEEKLY", id, changes, "Week updated")}
+        onDeleteWeek={id => deleteAnyRow("HQ_EDIBLE_WEEKLY", id, "Week deleted")}
+        onCreateAction={createEdibleAction}
+      >
+        {page}
+      </EdibleWorkspace>
     );
   }
 

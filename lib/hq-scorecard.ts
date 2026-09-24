@@ -149,20 +149,34 @@ export function formatValue(kind: Kind, v: number | null): string {
   }
 }
 
-type KpiDef = { key: string; kpi: string; label: string; kind: Kind; value: (m: WeekMetrics) => number | null };
-// `kpi` matches the KPI column on the targets sheet.
+// `kpi` matches the KPI column on the targets sheet. `help` / `how` are the plain-language fallbacks shown when the
+// sheet's Definition / Calculation cells are blank, so staff can always find out what a number means.
+type KpiDef = { key: string; kpi: string; label: string; kind: Kind; value: (m: WeekMetrics) => number | null; help: string; how: string };
 export const KPIS: KpiDef[] = [
-  { key: "netSales", kpi: "Net Sales", label: "Net sales", kind: "money0", value: m => m.netSales },
-  { key: "orders", kpi: "Orders", label: "Orders", kind: "count", value: m => m.orders },
-  { key: "avgTicket", kpi: "Average Ticket", label: "Average ticket", kind: "money2", value: m => m.avgTicket },
-  { key: "laborPct", kpi: "Labor %", label: "Labor %", kind: "pct1", value: m => m.laborPct },
-  { key: "salesPerLaborHour", kpi: "Sales / Labor Hour", label: "Sales / labor hour", kind: "money2", value: m => m.salesPerLaborHour },
-  { key: "addOnAttach", kpi: "Add-on Attachment Rate", label: "Add-on attach", kind: "pct1", value: m => m.addOnAttach },
-  { key: "refundVoidPct", kpi: "Refund + Void %", label: "Refund + void", kind: "pct1", value: m => m.refundVoidPct },
-  { key: "completionRate", kpi: "Completion Rate", label: "Completion rate", kind: "pct1", value: m => m.completionRate },
-  { key: "directPct", kpi: "Direct Sales %", label: "Direct sales", kind: "pct1", value: m => m.directPct },
-  { key: "onlinePct", kpi: "Online Sales Mix", label: "Online sales mix", kind: "pct1", value: m => m.onlinePct },
+  { key: "netSales", kpi: "Net Sales", label: "Net sales", kind: "money0", value: m => m.netSales,
+    help: "What the store sold in the week, after refunds and adjustments.", how: "Taken straight from the weekly sales report." },
+  { key: "orders", kpi: "Orders", label: "Orders", kind: "count", value: m => m.orders,
+    help: "How many customer orders were completed in the week.", how: "Taken straight from the weekly sales report." },
+  { key: "avgTicket", kpi: "Average Ticket", label: "Average ticket", kind: "money2", value: m => m.avgTicket,
+    help: "What a typical order is worth.", how: "Net sales ÷ orders." },
+  { key: "laborPct", kpi: "Labor %", label: "Labor %", kind: "pct1", value: m => m.laborPct,
+    help: "How much of every sales dollar goes to paying staff. Lower is better.", how: "Labor cost ÷ net sales." },
+  { key: "salesPerLaborHour", kpi: "Sales / Labor Hour", label: "Sales / labor hour", kind: "money2", value: m => m.salesPerLaborHour,
+    help: "How much each hour of staff time brings in.", how: "Net sales ÷ labor hours." },
+  { key: "addOnAttach", kpi: "Add-on Attachment Rate", label: "Add-on attach", kind: "pct1", value: m => m.addOnAttach,
+    help: "Out of every 100 orders, how many included an add-on.", how: "Orders with an add-on ÷ orders." },
+  { key: "refundVoidPct", kpi: "Refund + Void %", label: "Refund + void", kind: "pct1", value: m => m.refundVoidPct,
+    help: "How much of sales was given back or cancelled. Lower is better.", how: "(Refunds + voids) ÷ net sales." },
+  { key: "completionRate", kpi: "Completion Rate", label: "Completion rate", kind: "pct1", value: m => m.completionRate,
+    help: "Of the orders that could be fulfilled, how many were completed.", how: "Completed orders ÷ eligible orders." },
+  { key: "directPct", kpi: "Direct Sales %", label: "Direct sales", kind: "pct1", value: m => m.directPct,
+    help: "The share of sales that did not come through corporate or online orders.", how: "(Net sales − corporate / online sales) ÷ net sales." },
+  { key: "onlinePct", kpi: "Online Sales Mix", label: "Online sales mix", kind: "pct1", value: m => m.onlinePct,
+    help: "The share of sales that came through corporate or online orders.", how: "Corporate / online sales ÷ net sales." },
 ];
+
+/** What a number means, from the targets sheet (falling back to the built-in wording). */
+export type TileInfo = { definition: string; calculation: string; source: string; owner: string; note: string };
 
 export type Tile = {
   key: string;
@@ -175,6 +189,10 @@ export type Tile = {
   status: Status;
   higherIsBetter: boolean | null;
   change: string; // vs the previous week
+  green: number | null; // the sheet's thresholds, when set
+  yellow: number | null;
+  judgedByWeekTarget: boolean; // net sales: judged against that week's own Sales Target
+  info: TileInfo;
 };
 
 /**
@@ -242,6 +260,16 @@ export function scorecard(week: WeekMetrics, previous: WeekMetrics | null, targe
       status,
       higherIsBetter: /context/i.test(direction) ? null : !/lower/i.test(direction),
       change: previous ? changeText(def.kind, value, def.value(previous)) : "",
+      green,
+      yellow,
+      judgedByWeekTarget: isNetSales,
+      info: {
+        definition: (row?.Definition || "").trim() || def.help,
+        calculation: (row?.Calculation || "").trim() || def.how,
+        source: (row?.["Primary Source"] || "").trim(),
+        owner: (row?.Owner || "").trim(),
+        note: (row?.Notes || "").trim(),
+      },
     };
   });
 }
@@ -267,6 +295,150 @@ export function attention(tiles: Tile[], max = 3): { key: string; text: string }
       const variance = t.kind === "pct1" ? "" : `, ${gap >= 0 ? "+" : "−"}${Math.abs(gap).toFixed(1)}%`;
       return { key: t.key, text: `${t.label} ${dir} target (${t.valueText} vs ${t.targetText}${variance})` };
     });
+}
+
+/** One plain sentence saying how this tile's colour is decided, worded from the sheet's own target and thresholds. */
+export function statusRule(t: Tile): string {
+  const fmt = (v: number | null) => formatValue(t.kind, v);
+  if (t.higherIsBetter === null) return "Shown for context only, so it isn't coloured.";
+  if (t.target === null) return "No target is set yet, so it isn't coloured. Add one in “Targets & definitions”.";
+  const higher = t.higherIsBetter;
+  if (t.judgedByWeekTarget) {
+    return higher
+      ? `Judged against this week's sales target (${fmt(t.target)}): On track at or above it, Watch within 10% below it, Off track further below.`
+      : `Judged against this week's target (${fmt(t.target)}): On track at or below it, Watch within 10% above it, Off track further above.`;
+  }
+  const line = t.green ?? t.target;
+  if (t.yellow !== null) {
+    return higher
+      ? `On track at ${fmt(line)} or more, Watch down to ${fmt(t.yellow)}, Off track below that.`
+      : `On track at ${fmt(line)} or less, Watch up to ${fmt(t.yellow)}, Off track above that.`;
+  }
+  return higher
+    ? `On track when it reaches ${fmt(line)}, Watch when it falls short. Nothing is called Off track until a warning level is set.`
+    : `On track at ${fmt(line)} or less, Watch when it is higher. Nothing is called Off track until a warning level is set.`;
+}
+
+/** How many tiles are On track / Watch / Off track (tiles with no target, no data or context only aren't counted). */
+export function statusCounts(tiles: Tile[]): { on: number; watch: number; off: number } {
+  return {
+    on: tiles.filter(t => t.status === "on").length,
+    watch: tiles.filter(t => t.status === "watch").length,
+    off: tiles.filter(t => t.status === "off").length,
+  };
+}
+
+// ── entering a week: suggestions and sanity checks ───────────────────────────
+
+/** ISO week key such as "2026-W35" for a UTC-midnight date (what parseDate returns), so the week never shifts with the viewer's time zone. */
+export function isoWeekKeyUTC(d: Date): string {
+  const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  const yearStart = Date.UTC(t.getUTCFullYear(), 0, 1);
+  const week = Math.ceil(((t.getTime() - yearStart) / 86400000 + 1) / 7);
+  return `${t.getUTCFullYear()}-W${String(week).padStart(2, "0")}`;
+}
+
+/** The entered week just before `date` (a week ending exactly on `date` doesn't count). */
+export function weekBefore(weeks: WeekMetrics[], date: Date | null): WeekMetrics | null {
+  const cutoff = date ? date.getTime() : Infinity;
+  let found: WeekMetrics | null = null;
+  for (const w of weeks) if (w.weekEnding.getTime() < cutoff) found = w; // weeks are oldest-first
+  return found;
+}
+
+/** A week later than `from`, as YYYY-MM-DD (or "" when there is no week to follow). */
+export function weekAfter(from: Date | null): string {
+  return from ? new Date(from.getTime() + 7 * 86400000).toISOString().slice(0, 10) : "";
+}
+
+const money = (v: number) => formatValue("money0", v);
+
+/**
+ * Things worth a second look before a week is saved. They never block saving: the person entering the numbers
+ * knows better than we do. Most catch a mistyped digit (10x or a tenth of last week) or numbers that can't all be true.
+ */
+export function weekWarnings(values: Record<string, string>, previous: WeekMetrics | null, today: Date): string[] {
+  const n = (name: string) => parseNum(values[name]);
+  const out: string[] = [];
+  const week = parseDate(values["Week Ending"]);
+  if (week && week.getTime() > today.getTime() + 86400000) out.push("The week-ending date is in the future.");
+
+  const net = n("Net Sales");
+  const prev = previous?.netSales ?? null;
+  if (net !== null && net > 0 && prev !== null && prev > 0) {
+    const ratio = net / prev;
+    if (ratio >= 2.5) out.push(`Net sales ${money(net)} is ${ratio >= 9.5 ? "about " + Math.round(ratio) : ratio.toFixed(1)}× last week's ${money(prev)}. Check for an extra digit.`);
+    else if (ratio <= 0.4) out.push(`Net sales ${money(net)} is only ${Math.round(ratio * 100)}% of last week's ${money(prev)}. Check for a missing digit.`);
+  }
+
+  const orders = n("Orders"), addOn = n("Add-on Orders"), eligible = n("Eligible Orders"), completed = n("Completed Orders");
+  if (orders !== null && addOn !== null && addOn > orders) out.push(`${addOn} orders with an add-on is more than the ${orders} orders.`);
+  if (eligible !== null && completed !== null && completed > eligible) out.push(`${completed} completed orders is more than the ${eligible} eligible orders.`);
+  if (net !== null && net > 0) {
+    const labor = n("Labor Cost"), online = n("Corporate / Online Sales");
+    const giveBack = (n("Refund Amount") ?? 0) + (n("Void Amount") ?? 0);
+    if (labor !== null && labor > net) out.push(`Labor cost ${money(labor)} is more than net sales ${money(net)}.`);
+    if (giveBack > net) out.push(`Refunds and voids (${money(giveBack)}) are more than net sales ${money(net)}.`);
+    if (online !== null && online > net) out.push(`Corporate / online sales ${money(online)} are more than net sales ${money(net)}.`);
+  }
+  const negative = ["Net Sales", "Sales Target", "Same Week LY Sales", "Orders", "Labor Hours", "Labor Cost", "Add-on Orders", "Refund Amount", "Void Amount", "Corporate / Online Sales", "Eligible Orders", "Completed Orders"]
+    .filter(name => (n(name) ?? 0) < 0);
+  if (negative.length) out.push(`${negative.join(", ")} ${negative.length > 1 ? "are" : "is"} negative.`);
+  return out;
+}
+
+// ── actions tied to the numbers ──────────────────────────────────────────────
+
+export type ActionRow = { id: string; title: string; owner: string; due: string; status: string; why: string; escalated: boolean; blocked: boolean; row: SheetRow };
+
+/** The store's still-open work items, from raw Work-sheet rows. */
+export function openActions(rows: SheetRow[]): ActionRow[] {
+  return rows
+    .filter(r => !/done|complete|closed/i.test(r.Status || ""))
+    .map(r => ({
+      id: r.ID || "",
+      title: r["Work Item / Next Action"] || "Untitled",
+      owner: r.Owner || "",
+      due: r["Due Date"] || "",
+      status: r.Status || "",
+      why: r["WHY / OUTCOME SUPPORTED"] || "",
+      escalated: /^yes/i.test(r["Management Escalation?"] || ""),
+      blocked: /^yes/i.test(r["Blocked?"] || ""),
+      row: r,
+    }));
+}
+
+/** The text stored in an action's "why" cell so the action can be found again from the number it answers. */
+export const kpiTag = (kpiLabel: string, why = "") => `KPI: ${kpiLabel}${why.trim() ? ` — ${why.trim()}` : ""}`;
+
+/** Actions created from this KPI's miss (they carry its tag). */
+export function actionsForKpi(kpiLabel: string, actions: ActionRow[]): ActionRow[] {
+  const tag = `KPI: ${kpiLabel}`.toLowerCase();
+  return actions.filter(a => {
+    const why = a.why.trim().toLowerCase();
+    return why === tag || why.startsWith(tag + " —");
+  });
+}
+
+const bullets = (lines: string[]) => lines.map(l => `• ${l}`).join("\n");
+const actionLine = (a: ActionRow) => `${a.title}${a.owner ? ` (${a.owner}${a.due ? `, due ${a.due}` : ""})` : a.due ? ` (due ${a.due})` : ""}`;
+
+/** First draft of the weekly wrap-up, from the numbers and the open actions. People edit it before saving. */
+export function wrapUpDraft(tiles: Tile[], flagged: { text: string }[], actions: ActionRow[]): { wins: string; misses: string; blockers: string; next: string } {
+  const wins = tiles.filter(t => t.status === "on").map(t => `${t.label} on track (${t.valueText}${t.targetText ? ` vs ${t.targetText} target` : ""})`);
+  const needsDecision = actions.filter(a => a.escalated).map(a => `Needs Ahmad: ${actionLine(a)}`);
+  const blocked = actions.filter(a => a.blocked && !a.escalated).map(a => `Blocked: ${actionLine(a)}`);
+  const next = actions.filter(a => !a.escalated && !a.blocked).map(actionLine);
+  return { wins: bullets(wins), misses: bullets(flagged.map(f => f.text)), blockers: bullets([...needsDecision, ...blocked]), next: bullets(next) };
+}
+
+/** One line of headline numbers to keep with a saved wrap-up. */
+export function numbersLine(week: WeekMetrics, tiles: Tile[], weekLabel: string): string {
+  const v = (key: string) => tiles.find(t => t.key === key)?.valueText ?? "—";
+  const vs = week.targetVarPct === null ? "" : ` (${week.targetVarPct >= 0 ? "+" : "−"}${Math.abs(week.targetVarPct * 100).toFixed(1)}% vs target)`;
+  return `Numbers for the week ending ${weekLabel}: net sales ${v("netSales")}${vs} · orders ${v("orders")} · labor ${v("laborPct")} · average ticket ${v("avgTicket")} · refund + void ${v("refundVoidPct")}.`;
 }
 
 // ── monthly KSI review ───────────────────────────────────────────────────────

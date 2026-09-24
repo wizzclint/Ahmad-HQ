@@ -67,6 +67,14 @@ The Edible - Store KPIs tab is the weekly operating report (`Report.xlsx`) as a 
 
 Manage weeks from the scorecard: **＋ Add week**, **Edit** and **Delete** sit beside the week picker (and on every row of the "All weeks" list, which shows 12 at a time, newest first, can be filtered by year, and flags any week that was skipped). Editing saves only the fields you changed. You can also edit the tabs directly in the sheet. Either way the scorecard recomputes everything else. A KPI with green/yellow thresholds is judged by them, a KPI with only a target is On track or Watch, and net sales is judged against that week's own sales target. The first column of each tab must stay unique per row.
 
+**How the Edible - Store tabs connect** (all of it lives in `app/edible.tsx`, sharing one workspace so a dialog opens without leaving the tab):
+
+- **Every number explains itself.** The **i** on a tile shows what it means, how it's worked out, where it comes from, its target and how its colour is decided. The wording comes from `HQ_EDIBLE_TARGETS` (Definition, Calculation, Primary Source, Owner, Notes) with plain built-in wording when a cell is blank.
+- **Entering a week is guarded.** The date starts on the week after the latest one, each field shows the week before's value, and a mistyped digit (10x or a tenth of last week) or numbers that can't all be true (more add-ons than orders, labor above sales...) are pointed out first. Nothing is blocked: press "Save anyway" if the numbers are right.
+- **A number that is off track leads to an action.** **＋ Action** beside a flagged number creates an ordinary Work item under "Edible Operations" (who, by when, expected result, and whether it needs Ahmad's decision, which also shows on Home). The number it answers is kept in the item's "WHY / OUTCOME SUPPORTED" cell as `KPI: <name> — <expected result>`, so the action is listed under that number, and the KPIs tab has an "Actions in progress" list of the store's open work.
+- **Summary** opens with "Store health": the latest week's colour counts, four headline numbers and what needs attention.
+- **Weekly Closing** walks through the week: the numbers, what they say, what is being done about it, then the wrap-up. "Fill in from the numbers and actions" drafts the four boxes (misses from the flagged numbers, blockers from actions that need a decision or are blocked, next week from the other open actions). The wrap-up is saved under the ISO week of the week being closed, with the week's headline numbers kept in it.
+
 ## Checks
 
 ```bash
