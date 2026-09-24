@@ -265,4 +265,7 @@
 .explain-details .explain-list{margin-top:8px}
 .form-grid select{background:#fff;border:1px solid var(--line);border-radius:8px;font:inherit;max-width:100%;padding:9px}
 .store-health .mini-row .link-button{flex:none;white-space:nowrap}
+a.btn,a.link-button{display:inline-block;text-decoration:none}
+a.btn{color:inherit}
+a.btn:hover{background:var(--sage)}
 @media(max-width:800px){.kpis.kpis-5.pipe-kpis{grid-template-columns:1fr 1fr}.pipe-kpis>:last-child{grid-column:1/-1}}

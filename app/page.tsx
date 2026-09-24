@@ -221,11 +221,10 @@ const AREA_PAGES: Record<string, AreaPage> = {
     ],
   },
   gardenia: {
-    title: "Gardenia's Fire", subtitle: "Sales pipeline, product, customers and the weekly close",
+    title: "Gardenia's Fire", subtitle: "Sales pipeline, tasks and the weekly close",
     label: "Gardenia's Fire", business: /gardenia/i, captureKey: "gardenia",
     tabs: [
       { id: "summary", label: "Summary" }, { id: "tasks", label: "▤ Tasks" }, { id: "pipeline", label: "◆ Sales Pipeline" },
-      { id: "product", label: "Product & Pricing" }, { id: "customers", label: "Customers & Follow-ups" },
       { id: "closing", label: "Weekly Closing" }, { id: "kpi", label: "KPIs" },
     ],
   },
@@ -1253,7 +1252,6 @@ export default function HomePage() {
     deleteAccount: key => deleteAnyRow(PIPELINE_SHEET, key, "Account deleted"),
     logActivity: row => { addAnyRow("HQ_ACTIVITY", row, null).catch(() => { /* best-effort: the change itself already saved */ }); },
     createTask: createAccountTask,
-    createCustomer: row => addAnyRow("HQ_CUSTOMERS", row, `${row.Customer} added to Customers`),
     saveMonthTest: text => addAnyRow("HQ_NOTES", monthTestRow(text, session?.user?.name || "Ahmad", new Date()), "This month’s test saved"),
   };
 
@@ -1499,10 +1497,12 @@ export default function HomePage() {
       <>
         {isStore && <CloseTheWeek wraps={wraps} onSave={saveWrapUp} />}
         {isGardenia && <CloseSalesWeek wraps={wraps} onSave={saveWrapUp} />}
-        <Section title="Checklists for this business">
-          {areaTable("HQ_CHECKLIST_RUNS", data.checklistRuns, belongs, ["Checklist Name", "Period Key", "Status", "Completion %", "On Time?", "Owner"], { Business: cfg.label })}
-          <p className="sub" style={{ marginBottom: 0 }}>{runs.length} run{runs.length === 1 ? "" : "s"} recorded. Use “Run Maintenance” in the sidebar to generate the missing daily/weekly checklists.</p>
-        </Section>
+        {(!isGardenia || runs.length > 0) && (
+          <Section title="Checklists for this business">
+            {areaTable("HQ_CHECKLIST_RUNS", data.checklistRuns, belongs, ["Checklist Name", "Period Key", "Status", "Completion %", "On Time?", "Owner"], { Business: cfg.label })}
+            <p className="sub" style={{ marginBottom: 0 }}>{runs.length} run{runs.length === 1 ? "" : "s"} recorded. Use “Run Maintenance” in the sidebar to generate the missing daily/weekly checklists.</p>
+          </Section>
+        )}
         {!isStore && !isGardenia && (
           <Section title={`Weekly wrap-up · ${wk}`}>
             <WeeklyWrapUpForm weekKey={wk} onSave={saveWrapUp} />
@@ -1547,21 +1547,27 @@ export default function HomePage() {
     if (viewId === "store") return edibleKpiTab();
     const s = taskStats(areaTasks(viewId));
     const spotlight = areaSpotlight(viewId, cfg);
+    // Gardenia's Fire shows the two register tables only once the client has put rows in them (they are empty today).
+    const isSales = viewId === "gardenia";
     return (
       <>
-        {viewId === "gardenia" && <PipelineKpis />}
+        {isSales && <PipelineKpis />}
         <section className="kpis">
           <Kpi label="Task completion" value={`${s.pct}%`} detail={`${s.done.length} of ${s.total} done`} tone="mint" />
           <Kpi label="Open tasks" value={s.open.length} detail="Still to do" tone="sage" />
           <Kpi label="Overdue" value={s.overdue.length} detail="Past their due date" tone="peach" />
           {spotlight.map(k => <Kpi key={k.label} {...k} />)}
         </section>
-        <Section title="Key Status Indicators">
-          {areaTable("HQ_KSI", data.ksi, r => cfg.business.test(r["Business / Area"] || ""), ["Metric / Indicator", "Current", "Status", "Threshold / Target", "Direction", "Owner", "Next Move"], { "Business / Area": cfg.label })}
-        </Section>
-        <Section title="Targets vs actual">
-          {areaTable("HQ_TARGETS", data.targets, r => cfg.business.test(r.Business || ""), ["Metric", "Target", "Actual", "Variance", "Variance %", "YoY %", "Owner"], { Business: cfg.label })}
-        </Section>
+        {(!isSales || data.ksi.some(r => cfg.business.test(r["Business / Area"] || ""))) && (
+          <Section title="Key Status Indicators">
+            {areaTable("HQ_KSI", data.ksi, r => cfg.business.test(r["Business / Area"] || ""), ["Metric / Indicator", "Current", "Status", "Threshold / Target", "Direction", "Owner", "Next Move"], { "Business / Area": cfg.label })}
+          </Section>
+        )}
+        {(!isSales || data.targets.some(r => cfg.business.test(r.Business || ""))) && (
+          <Section title="Targets vs actual">
+            {areaTable("HQ_TARGETS", data.targets, r => cfg.business.test(r.Business || ""), ["Metric", "Target", "Actual", "Variance", "Variance %", "YoY %", "Owner"], { Business: cfg.label })}
+          </Section>
+        )}
       </>
     );
   }
@@ -1575,7 +1581,6 @@ export default function HomePage() {
       case "pipeline": return <PipelineTab />;
       case "closing": return areaClosingTab(cfg);
       case "kpi": return areaKpiTab(viewId, cfg);
-      case "product": return <Section title="Product & Pricing">{edt("HQ_GARDENIA_PRODUCT", data.gardeniaProduct, ["Product / Test", "Test Status", "Unit Cost", "Price", "Target Margin", "Actual Margin", "Owner"])}</Section>;
       case "register": return <Section title="Finance Register">{edt("HQ_FINANCE_REGISTER", data.financeReg, ["Register Type", "Entity / Property", "Account / Policy / Vendor / Tax", "Status", "Amount / Balance", "Due / Next Date", "Owner"])}</Section>;
       case "budgets": return <Section title="Budgets">{edt("HQ_BUDGETS", data.budgets, ["Year", "Month", "Business", "Revenue Budget", "Net Profit Budget", "Owner"])}</Section>;
       case "checklists": return (
@@ -1586,13 +1591,8 @@ export default function HomePage() {
       );
       case "customers": return (
         <>
-          <Section title="Customers">
-            {viewId === "gardenia" && <p className="sub" style={{ marginTop: 0 }}>Prospects live in the Sales Pipeline. This list is for accounts that have bought: moving a pipeline card to First Order Won offers to add it here.</p>}
-            {areaTable("HQ_CUSTOMERS", data.customers, belongs, ["Date", "Customer", "Type", "Revenue", "Relationship Stage", "Next Action", "Owner"], defaults)}
-          </Section>
-          {viewId === "gardenia"
-            ? <Section title="Follow-ups">{areaTable("HQ_CUSTOMER_FOLLOWUP", data.customerFollowup, belongs, ["Follow-up ID", "Customer / Recipient", "Priority", "Due", "Status", "Next Action", "Owner"], defaults)}</Section>
-            : <Section title="Reviews">{areaTable("HQ_REVIEWS", data.reviews, belongs, ["Date", "Platform", "Rating", "Theme", "Severity", "Response Status", "Owner"], defaults)}</Section>}
+          <Section title="Customers">{areaTable("HQ_CUSTOMERS", data.customers, belongs, ["Date", "Customer", "Type", "Revenue", "Relationship Stage", "Next Action", "Owner"], defaults)}</Section>
+          <Section title="Reviews">{areaTable("HQ_REVIEWS", data.reviews, belongs, ["Date", "Platform", "Rating", "Theme", "Severity", "Response Status", "Owner"], defaults)}</Section>
           <Section title="Customer Issues">{areaTable("HQ_CUSTOMER_ISSUES", data.customerIssues, belongs, ["Date", "Issue Type", "Customer", "Severity", "Recovery / Action", "Status", "Owner"], defaults)}</Section>
         </>
       );
@@ -1622,7 +1622,6 @@ export default function HomePage() {
           rows={data.gardeniaPipeline}
           activity={data.activity}
           tasks={data.gardeniaTasks}
-          customers={data.customers}
           notes={data.notes}
           owners={owners}
           me={session?.user?.name || ""}

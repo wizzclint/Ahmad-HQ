@@ -23,7 +23,7 @@ export const SALES_STAGE_DEFS: StageDef[] = [
   { id: "recurringWon", label: "Recurring Won", test: /recurring/ },
 ];
 
-export const STAGE = { qualified: 3, tastingScheduled: 4, firstOrderWon: 6, recurringWon: 7 } as const;
+export const STAGE = { qualified: 3, tastingScheduled: 4, recurringWon: 7 } as const;
 
 export const STAGE_HINTS: Record<string, string> = {
   toResearch: "We know the name; still finding the decision-maker.",
@@ -52,19 +52,22 @@ export function stageChoices(current: string): string[] {
 
 // ── Columns: found by name, so a column the client adds or renames still shows up ─────────────────────────────
 
-export type Role = "stage" | "contact" | "lastContact" | "nextFollowUp" | "tasting" | "cadence" | "value" | "risk" | "owner" | "source" | "notes";
+export type Role = "stage" | "contact" | "phone" | "email" | "lastContact" | "nextFollowUp" | "tasting" | "cadence" | "value" | "risk" | "owner" | "source" | "notes";
 export type Roles = Partial<Record<Role, string>>;
 
 export const DEFAULT_HEADERS = [
   "Account / Prospect", "Stage", "Contact / Company", "Last Contact", "Next Follow-up", "Tasting / Sample",
-  "Standing Cadence", "Revenue / Value", "Risk", "Owner", "Source / Evidence", "Notes",
+  "Standing Cadence", "Revenue / Value", "Risk", "Owner", "Source / Evidence", "Notes", "Phone", "Email",
 ];
 
 const norm = (h: string) => h.toLowerCase().replace(/[^a-z0-9]+/g, " ").trim();
+// Order matters: "Contact Phone" is a phone, not the contact's name, so phone and email are tried before "contact".
 const ROLE_TESTS: [Role, RegExp][] = [
   ["stage", /^stage$/],
   ["lastContact", /^last (contact|touch)/],
   ["nextFollowUp", /^next follow/],
+  ["phone", /phone|mobile|cell|^tel\b/],
+  ["email", /e ?mail/],
   ["contact", /^contact/],
   ["tasting", /tasting|sample/],
   ["cadence", /cadence/],
@@ -97,7 +100,7 @@ export type FieldGroup = { title: string; headers: string[] };
 export function fieldGroups(headers: string[], roles: Roles): FieldGroup[] {
   const pick = (parts: (Role | "name")[]) => parts.map(p => (p === "name" ? headers[0] : roles[p])).filter((h): h is string => Boolean(h));
   const groups: FieldGroup[] = [
-    { title: "Who", headers: pick(["name", "contact", "owner"]) },
+    { title: "Who", headers: pick(["name", "contact", "phone", "email", "owner"]) },
     { title: "Where it stands", headers: pick(["stage", "risk"]) },
     { title: "Follow-up", headers: pick(["lastContact", "nextFollowUp", "cadence"]) },
     { title: "Offer", headers: pick(["tasting", "value"]) },
@@ -112,6 +115,8 @@ export function fieldGroups(headers: string[], roles: Roles): FieldGroup[] {
 const FIELD_HINTS: Record<Role | "name", string> = {
   name: "The company (or person) we are approaching.",
   contact: "Who we deal with there, and their role.",
+  phone: "The best number to reach them on. Tap it on a phone to call.",
+  email: "Where to write to them. Tap it to start an email.",
   owner: "Who on our side is responsible for this account.",
   stage: "Where they are in the sales steps.",
   risk: "Anything that could stop this deal.",
@@ -128,6 +133,14 @@ export function fieldHint(header: string, headers: string[], roles: Roles): stri
   if (header === headers[0]) return FIELD_HINTS.name;
   const role = (Object.keys(roles) as Role[]).find(r => roles[r] === header);
   return role ? FIELD_HINTS[role] : "";
+}
+
+/** A tap-to-call or tap-to-email link for a phone / email cell, or null when the cell is not one (free text stays plain text). */
+export function contactLink(kind: "phone" | "email", value: string | undefined | null): string | null {
+  const v = String(value ?? "").trim();
+  if (kind === "email") return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v) ? `mailto:${v}` : null;
+  const digits = v.replace(/\D/g, "");
+  return /^[\d\s()+.\-x]+$/i.test(v) && digits.length >= 7 && digits.length <= 15 ? `tel:${v.startsWith("+") ? "+" : ""}${digits}` : null;
 }
 
 // ── Dates: read strictly. A free-text cell such as "Follow up on friday" has no date, and we never guess one ────
@@ -470,30 +483,6 @@ export function taskTitle(what: string, account: string): string {
 }
 
 export const taskIsClosed = (t: SheetRow) => /done|complete|closed/i.test(t.Status || "");
-
-// ── Customers: a won account becomes a customer ──────────────────────────────
-
-const pad = (n: number) => String(n).padStart(2, "0");
-const usDate = (d: Date) => `${pad(d.getUTCMonth() + 1)}/${pad(d.getUTCDate())}/${d.getUTCFullYear()}`;
-
-export function hasCustomer(customers: SheetRow[], name: string): boolean {
-  const k = nameKey(name);
-  return customers.some(c => /gardenia/i.test(c.Business || "") && nameKey(c.Customer || "") === k);
-}
-
-export function customerRowFor(a: Account, today: Date, o: { type: string; nextAction: string; owner: string }): Record<string, string> {
-  return {
-    Date: usDate(today),
-    Business: PIPELINE_AREA,
-    Customer: a.name,
-    Type: o.type.trim(),
-    "New / Repeat": "New",
-    "Relationship Stage": "First order won",
-    "Next Action": o.nextAction.trim(),
-    Owner: o.owner.trim() || a.owner,
-    "Source / Evidence": "Won from the Sales Pipeline",
-  };
-}
 
 // ── "This month's test": the client's one-line goal for the month, kept as a note so staff can update it ─────
 

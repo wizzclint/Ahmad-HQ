@@ -4,9 +4,9 @@ import { createContext, useContext, useEffect, useMemo, useState, type FormEvent
 import type { SheetRow } from "@/lib/hq-types";
 import {
   FOLLOW_GROUPS, NUMBER_HELP, SALES_STAGE_DEFS, STAGE, STAGE_HINTS,
-  accountsFrom, activityRow, addNoteLine, composeFollowUp, customerRowFor, dayLabel, daysSinceContact, duplicateOf, fieldGroups, fieldHint,
-  followGroups, followState, hasCustomer, isBlank, isMine, isoDay, latestMonthTest, matchesSearch, nameKey, needsTouch, numbersLine, parseFollowUp,
-  pipelineColumns, pipelineEvents, pipelineNumbers, quickDates, reachedNames, stageChoices, stageIndex, suggestStage, taskIsClosed, tasksForAccount,
+  accountsFrom, activityRow, addNoteLine, composeFollowUp, contactLink, dayLabel, daysSinceContact, duplicateOf, fieldGroups, fieldHint,
+  followGroups, followState, isBlank, isMine, isoDay, latestMonthTest, matchesSearch, nameKey, needsTouch, numbersLine, parseFollowUp,
+  pipelineColumns, pipelineEvents, pipelineNumbers, quickDates, reachedNames, stageChoices, suggestStage, taskIsClosed, tasksForAccount,
   todayUTC, touchKinds, touchLine, weekSpan, weekSummary, weekWrapUp,
   type Account, type PipelineEvent, type PipelineNumbers, type Roles,
 } from "@/lib/hq-pipeline";
@@ -14,7 +14,7 @@ import { SalesFunnelChart } from "./charts";
 import { Modal } from "./modal";
 
 // Gardenia's Fire sales pipeline, in one place so the tabs work as one system:
-//  - <PipelineWorkspace> owns the accounts, the dialogs (account card, add / edit, log a touch, add a task, won -> customer,
+//  - <PipelineWorkspace> owns the accounts, the dialogs (account card, add / edit, log a touch, add a task,
 //    this month's test) and the history, so the Summary, Sales Pipeline, KPIs and Weekly Closing tabs can all open them;
 //  - the Sales Pipeline tab (follow-ups, board, every column), the Summary panel, the KPI numbers and the guided closing.
 // The page supplies the saving (see PipelineActions), so this file never talks to the API.
@@ -28,11 +28,10 @@ export type PipelineActions = {
   /** Best-effort history entry: a failure must not undo the change that was already saved. */
   logActivity: (row: Record<string, string>) => void;
   createTask: (task: NewAccountTask) => Promise<void>;
-  createCustomer: (row: Record<string, string>) => Promise<void>;
   saveMonthTest: (text: string) => Promise<void>;
 };
 
-type Dialog = { kind: "view" | "edit" | "touch" | "task" | "won"; key: string } | { kind: "add" | "test" };
+type Dialog = { kind: "view" | "edit" | "touch" | "task"; key: string } | { kind: "add" | "test" };
 
 type Workspace = {
   accounts: Account[];
@@ -52,7 +51,8 @@ type Workspace = {
   open: (d: Dialog) => void;
   close: () => void;
   moveStage: (a: Account, label: string) => Promise<void>;
-  afterStageChange: (a: Account, label: string) => void;
+  /** Record that an account moved to `label` (call after the change itself saved). */
+  logMove: (a: Account, label: string) => void;
   logAdded: (name: string, row: Record<string, string>) => void;
   tasksFor: (a: Account) => SheetRow[];
   eventsFor: (a: Account) => PipelineEvent[];
@@ -92,14 +92,13 @@ function FollowChip({ a, today }: { a: Account; today: Date }) {
 
 // ── The shared workspace ─────────────────────────────────────────────────────
 
-export function PipelineWorkspace({ rows, activity, tasks, customers, notes, owners, me, actions, children }: {
+export function PipelineWorkspace({ rows, activity, tasks, notes, owners, me, actions, children }: {
   /** HQ_GARDENIA_PIPELINE. */
   rows: SheetRow[];
   /** HQ_ACTIVITY: stage moves and touches are read from (and written to) it. */
   activity: SheetRow[];
   /** HQ_GARDENIA_TASKS. */
   tasks: SheetRow[];
-  customers: SheetRow[];
   /** HQ_NOTES (for "this month's test"). */
   notes: SheetRow[];
   owners: string[];
@@ -135,14 +134,10 @@ export function PipelineWorkspace({ rows, activity, tasks, customers, notes, own
   const stageLabelOf = (a: Account) => a.stage || SALES_STAGE_DEFS[0].label;
   const logMove = (a: Account, to: string) =>
     actions.logActivity(activityRow({ user: me || "Someone", type: "move", name: a.name, from: stageLabelOf(a), to, detail: `${a.name}: ${stageLabelOf(a)} → ${to}`, now: new Date() }));
-  const offerCustomer = (a: Account, to: string) => {
-    if (stageIndex(to) === STAGE.firstOrderWon && a.stageIdx < STAGE.firstOrderWon && !hasCustomer(customers, a.name)) setDialog({ kind: "won", key: a.key });
-  };
-  const afterStageChange = (a: Account, to: string) => { logMove(a, to); offerCustomer(a, to); };
   const moveStage = async (a: Account, label: string) => {
     if (!roles.stage || label === a.stage) return;
     await actions.updateAccount(a.key, { [roles.stage]: label }, `${a.name} moved to ${label}`);
-    afterStageChange(a, label);
+    logMove(a, label);
   };
 
   const value: Workspace = {
@@ -150,7 +145,7 @@ export function PipelineWorkspace({ rows, activity, tasks, customers, notes, own
     open: setDialog,
     close: () => setDialog(null),
     moveStage,
-    afterStageChange,
+    logMove,
     logAdded: (name, row) => actions.logActivity(activityRow({ user: me || "Someone", type: "add", name, to: roles.stage ? row[roles.stage] ?? "" : "", detail: `${name} added to the pipeline${roles.owner && row[roles.owner] ? ` (${row[roles.owner]})` : ""}`, now: new Date() })),
     tasksFor: a => tasksForAccount(a.name, tasks),
     eventsFor: a => events.filter(e => nameKey(e.name) === nameKey(a.name)),
@@ -166,12 +161,11 @@ export function PipelineWorkspace({ rows, activity, tasks, customers, notes, own
   } else if (dialog && account) {
     const k = dialog.kind;
     modal = (
-      <Modal key={`${k}-${account.key}`} title={k === "view" ? account.name : k === "edit" ? `Edit ${account.name}` : k === "touch" ? `Log a touch · ${account.name}` : k === "task" ? `Add a task · ${account.name}` : `${account.name} · first order won`} onClose={done}>
+      <Modal key={`${k}-${account.key}`} title={k === "view" ? account.name : k === "edit" ? `Edit ${account.name}` : k === "touch" ? `Log a touch · ${account.name}` : `Add a task · ${account.name}`} onClose={done}>
         {k === "view" && <AccountView a={account} />}
         {k === "edit" && <AccountForm account={account} onClose={() => setDialog({ kind: "view", key: account.key })} onSaved={key => setDialog({ kind: "view", key })} />}
         {k === "touch" && <TouchForm a={account} onClose={done} />}
         {k === "task" && <TaskForm a={account} onClose={done} />}
-        {k === "won" && <WonForm a={account} onClose={done} />}
       </Modal>
     );
   }
@@ -212,6 +206,8 @@ function AccountView({ a }: { a: Account }) {
     }
     if (h === roles.lastContact) return raw ? <span>{raw} <span className="muted">· {lastTouchText(a, today)}</span></span> : <span className="muted">Never contacted</span>;
     if (!raw) return <span className="muted">Not set</span>;
+    const link = h === roles.phone ? contactLink("phone", raw) : h === roles.email ? contactLink("email", raw) : null;
+    if (link) return <a href={link}>{raw}</a>;
     if (h === roles.notes) return <div className="acct-notes">{raw.split("\n").map((l, i) => <p key={i}>{l}</p>)}</div>;
     if (URL_ONLY.test(raw)) return <a href={raw} target="_blank" rel="noreferrer noopener">{raw}</a>;
     return raw;
@@ -320,7 +316,7 @@ function AccountForm({ account, onClose, onSaved }: { account?: Account; onClose
         const changes = Object.fromEntries(headers.filter(h => next[h] !== initial[h]).map(h => [h, next[h]]));
         if (!Object.keys(changes).length) return setError("Nothing was changed.");
         await ws.actions.updateAccount(account.key, changes, `${name} updated`);
-        if (roles.stage && changes[roles.stage] !== undefined) ws.afterStageChange(account, changes[roles.stage]);
+        if (roles.stage && changes[roles.stage] !== undefined) ws.logMove(account, changes[roles.stage]);
         onSaved(name);
       } else {
         await ws.actions.addAccount(next);
@@ -383,7 +379,13 @@ function AccountForm({ account, onClose, onSaved }: { account?: Account; onClose
     return (
       <label key={h} className={h === roles.source ? "full" : undefined}>
         <span>{h}{h === nameHeader && <span aria-hidden="true"> *</span>}</span>
-        <input value={v} onChange={set(h)} list={h === roles.owner ? "pipeline-owners" : undefined} required={h === nameHeader} />
+        <input
+          type={h === roles.phone ? "tel" : h === roles.email ? "email" : undefined}
+          value={v}
+          onChange={set(h)}
+          list={h === roles.owner ? "pipeline-owners" : undefined}
+          required={h === nameHeader}
+        />
         <small className="sub">{hint}</small>
       </label>
     );
@@ -449,7 +451,7 @@ function TouchForm({ a, onClose }: { a: Account; onClose: () => void }) {
         user: ws.me || "Someone", type: "touch", name: a.name, to: `${kind} · ${reached ? "Reached" : "No answer"}`,
         detail: `${a.name}: ${kind} (${reached ? "reached" : "no answer"})${summary ? ` — ${summary.slice(0, 140)}` : ""}`, now: new Date(),
       }));
-      if (changes[roles.stage ?? ""] !== undefined) ws.afterStageChange(a, changes[roles.stage as string]);
+      if (changes[roles.stage ?? ""] !== undefined) ws.logMove(a, changes[roles.stage as string]);
       onClose();
     } catch {
       // the page already showed an error toast; keep the form open with what was typed
@@ -566,53 +568,6 @@ function TaskForm({ a, onClose }: { a: Account; onClose: () => void }) {
   );
 }
 
-// A first order is the moment a prospect becomes a customer: offer to add it to Customers so nobody re-types it.
-function WonForm({ a, onClose }: { a: Account; onClose: () => void }) {
-  const ws = usePipeline();
-  const [v, setV] = useState({ type: "", nextAction: "Follow up on the first order", owner: a.owner || ws.myOwner });
-  const [saving, setSaving] = useState(false);
-  const set = (k: keyof typeof v) => (e: React.ChangeEvent<HTMLInputElement>) => setV(cur => ({ ...cur, [k]: e.target.value }));
-
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (saving) return;
-    setSaving(true);
-    try {
-      await ws.actions.createCustomer(customerRowFor(a, ws.today, v));
-      onClose();
-    } catch {
-      // the page already showed an error toast; keep the form open
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <form className="form-grid" onSubmit={submit}>
-      <p className="sub full ctx-line"><b>{a.name}</b> just placed a first order. Add them to Customers so they are tracked as a customer from here on?</p>
-      <label>
-        <span>What kind of business?</span>
-        <input value={v.type} onChange={set("type")} placeholder="e.g. Dental office" />
-      </label>
-      <label>
-        <span>Who looks after them?</span>
-        <input value={v.owner} onChange={set("owner")} />
-      </label>
-      <label className="full">
-        <span>Next step</span>
-        <input value={v.nextAction} onChange={set("nextAction")} />
-      </label>
-      <div className="edit-actions">
-        <button className="btn" type="button" onClick={onClose} disabled={saving}>Not now</button>
-        <button className={`btn primary${saving ? " is-pending" : ""}`} type="submit" disabled={saving} aria-busy={saving}>
-          {saving && <span className="spinner" aria-hidden="true" />}
-          {saving ? "Adding…" : "Add to Customers"}
-        </button>
-      </div>
-    </form>
-  );
-}
-
 function MonthTestForm({ onClose }: { onClose: () => void }) {
   const ws = usePipeline();
   const [text, setText] = useState(ws.monthTest?.Note ?? "");
@@ -655,8 +610,11 @@ function MonthTestForm({ onClose }: { onClose: () => void }) {
 
 // ── The Sales Pipeline tab ───────────────────────────────────────────────────
 
+const telOf = (a: Account, roles: Roles) => (roles.phone ? contactLink("phone", a.row[roles.phone]) : null);
+
 function AccountCard({ a }: { a: Account }) {
   const ws = usePipeline();
+  const tel = telOf(a, ws.roles);
   const sub = [a.contact, a.value].filter(Boolean).join(" · ");
   return (
     <article className="kanban-card acct-card">
@@ -667,6 +625,7 @@ function AccountCard({ a }: { a: Account }) {
       {!isBlank(a.risk) && <span className="badge warn" title="Risk">Risk: {a.risk}</span>}
       <div className="kanban-card-actions">
         <button type="button" className="link-button" onClick={() => ws.open({ kind: "touch", key: a.key })}>Log a touch</button>
+        {tel && <a className="link-button" href={tel}>Call</a>}
         {ws.roles.stage && (
           <select className="acct-move" aria-label={`Move ${a.name} to another stage`} value={a.stage || SALES_STAGE_DEFS[0].label} onChange={e => { ws.moveStage(a, e.target.value).catch(() => {}); }}>
             {stageChoices(a.stage).map(l => <option key={l} value={l}>{l}</option>)}
@@ -752,6 +711,7 @@ function FollowUpsView({ accounts }: { accounts: Account[] }) {
                   </div>
                   <div className="fu-actions">
                     <button type="button" className="btn primary" onClick={() => ws.open({ kind: "touch", key: a.key })}>Log a touch</button>
+                    {telOf(a, ws.roles) && <a className="btn" href={telOf(a, ws.roles) as string}>Call</a>}
                     <button type="button" className="btn" onClick={() => ws.open({ kind: "view", key: a.key })}>Open</button>
                   </div>
                 </div>
