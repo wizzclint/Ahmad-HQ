@@ -41,6 +41,10 @@ const rel = (a: number | null, b: number | null) => (a === null || b === null ||
 // ── weekly metrics ───────────────────────────────────────────────────────────
 
 export type WeekMetrics = {
+  /** The row's first-column value exactly as the sheet holds it: the key the generic edit/delete find a row by. */
+  id: string;
+  /** The raw sheet row, so an editor can be pre-filled with exactly what is stored. */
+  row: SheetRow;
   weekEnding: Date;
   netSales: number | null;
   salesTarget: number | null;
@@ -72,6 +76,8 @@ export function weekMetrics(row: SheetRow, prevNetSales: number | null = null): 
   const refund = parseNum(row["Refund Amount"]);
   const voided = parseNum(row["Void Amount"]);
   return {
+    id: row["Week Ending"],
+    row,
     weekEnding,
     netSales,
     salesTarget,
@@ -108,6 +114,20 @@ export function weeklySeries(rows: SheetRow[]): WeekMetrics[] {
     prev = m.netSales;
   }
   return out;
+}
+
+/**
+ * How many whole weeks were skipped between two consecutive entries (0 when they are a week apart).
+ * Week endings are not always the same weekday, so 8 or 10 days still counts as consecutive.
+ */
+export function missingWeeks(prev: Date, cur: Date): number {
+  const days = (cur.getTime() - prev.getTime()) / 86400000;
+  return Math.max(0, Math.round(days / 7) - 1);
+}
+
+/** The calendar years that have at least one week, newest first. */
+export function weekYears(weeks: WeekMetrics[]): number[] {
+  return [...new Set(weeks.map(w => w.weekEnding.getUTCFullYear()))].sort((a, b) => b - a);
 }
 
 // ── KPI tiles and statuses ───────────────────────────────────────────────────

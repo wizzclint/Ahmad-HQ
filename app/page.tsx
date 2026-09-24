@@ -6,7 +6,7 @@ import type { HqBootstrap, SheetRow } from "@/lib/hq-types";
 import { areaProgress, overallProgress, pipelineCounts, weeklyActivity } from "@/lib/hq-progress";
 import { ProgressPanel } from "./charts";
 import { AppShell, type NavSection } from "./shell";
-import { EdibleScorecard, WeeklyEntryForm } from "./edible";
+import { EdibleScorecard } from "./edible";
 import { APP_SHEETS } from "@/lib/hq-schemas";
 
 type View =
@@ -1079,7 +1079,7 @@ export default function HomePage() {
   }
 
   // Generic delete for any HQ_* sheet
-  async function deleteAnyRow(sheet: string, id: string) {
+  async function deleteAnyRow(sheet: string, id: string, message = "Deleted") {
     const res = await tracked(() => call("/api/hq", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -1090,7 +1090,7 @@ export default function HomePage() {
       throw new Error("Delete failed");
     }
     updateSheetRows(sheet, rows => rows.filter(r => r[Object.keys(r)[0]] !== id));
-    notify("Deleted");
+    notify(message);
   }
 
   async function deleteWorkItem(id: string) {
@@ -1492,17 +1492,14 @@ export default function HomePage() {
     const cols = (sheet: string) => APP_SHEETS[sheet];
     return (
       <>
-        <EdibleScorecard weekly={data.edibleWeekly} targets={data.edibleTargets} ksiReview={data.edibleKsiReview} />
-        <Section title="Add a week">
-          <WeeklyEntryForm
-            existing={data.edibleWeekly}
-            onInvalid={message => notify(message, "error")}
-            onAdd={row => addAnyRow("HQ_EDIBLE_WEEKLY", row, `Week ending ${row["Week Ending"]} added`)}
-          />
-        </Section>
-        <Section title="Weekly numbers">
-          {edt("HQ_EDIBLE_WEEKLY", data.edibleWeekly, cols("HQ_EDIBLE_WEEKLY"), cols("HQ_EDIBLE_WEEKLY"), undefined, undefined, undefined, cols("HQ_EDIBLE_WEEKLY").length)}
-        </Section>
+        <EdibleScorecard
+          weekly={data.edibleWeekly}
+          targets={data.edibleTargets}
+          ksiReview={data.edibleKsiReview}
+          onAdd={row => addAnyRow("HQ_EDIBLE_WEEKLY", row, `Week ending ${row["Week Ending"]} added`)}
+          onUpdate={(id, changes) => updateAnyRow("HQ_EDIBLE_WEEKLY", id, changes, "Week updated")}
+          onDelete={id => deleteAnyRow("HQ_EDIBLE_WEEKLY", id, "Week deleted")}
+        />
         <Section title="Targets &amp; definitions">
           {edt("HQ_EDIBLE_TARGETS", data.edibleTargets, cols("HQ_EDIBLE_TARGETS"), cols("HQ_EDIBLE_TARGETS"), undefined, undefined, undefined, cols("HQ_EDIBLE_TARGETS").length)}
         </Section>

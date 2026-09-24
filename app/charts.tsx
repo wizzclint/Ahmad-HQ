@@ -69,19 +69,24 @@ export function Legend({ items }: { items: { label: string; color: string; line?
   );
 }
 
-export function ChartCard({ title, note, legend, table, className = "", children }: {
+export function ChartCard({ title, note, legend, actions, table, className = "", children }: {
   title: string;
   note?: string;
   legend?: ReactNode;
+  /** Controls shown at the right of the card header (e.g. a date-range picker). */
+  actions?: ReactNode;
   table: ReactNode;
   className?: string;
   children: ReactNode;
 }) {
   return (
     <figure className={`card viz ${className}`}>
-      <figcaption>
-        <h3 className="viz-title">{title}</h3>
-        {note && <p className="viz-note">{note}</p>}
+      <figcaption className={actions ? "viz-cap" : undefined}>
+        <div>
+          <h3 className="viz-title">{title}</h3>
+          {note && <p className="viz-note">{note}</p>}
+        </div>
+        {actions}
       </figcaption>
       {legend}
       {children}
@@ -253,9 +258,10 @@ function trendTicks(max: number, integer: boolean): number[] {
   return [0, step, step * 2, step * 3];
 }
 
-export function TrendChart({ title, note, className = "viz-half", labels, tipTitles, series, formatValue = String, formatTick = String, integerTicks = false, tableLabel = "Week of", ariaLabel, empty }: {
+export function TrendChart({ title, note, actions, className = "viz-half", labels, tipTitles, series, formatValue = String, formatTick = String, integerTicks = false, tableLabel = "Week of", ariaLabel, empty }: {
   title: string;
   note?: string;
+  actions?: ReactNode;
   className?: string;
   labels: string[];
   tipTitles: string[];
@@ -280,7 +286,11 @@ export function TrendChart({ title, note, className = "viz-half", labels, tipTit
   const x = (i: number) => M.l + (n > 1 ? (i * innerW) / (n - 1) : innerW / 2);
   const y = (v: number) => M.t + innerH - (v / yMax) * innerH;
   const path = (vals: number[]) => vals.map((v, i) => `${i ? "L" : "M"}${x(i)},${y(v)}`).join(" ");
-  const everyOther = innerW / n < 46;
+  // Label every `step`-th point, counting back from the newest so the latest label always shows.
+  // Labels are ~40px wide: label every point while there is room (46px apart), otherwise space them
+  // at least 60px apart, which also keeps the right-aligned newest label clear of its neighbour.
+  const perPoint = innerW / Math.max(1, n - 1);
+  const step = perPoint >= 46 ? 1 : Math.ceil(60 / perPoint);
 
   const nearest = (clientX: number, el: SVGRectElement) => {
     const r = el.getBoundingClientRect();
@@ -311,6 +321,7 @@ export function TrendChart({ title, note, className = "viz-half", labels, tipTit
       className={className}
       title={title}
       note={note}
+      actions={actions}
       legend={<Legend items={series.map(s => ({ label: s.label, color: s.color, line: true }))} />}
       table={(
         <table>
@@ -331,8 +342,8 @@ export function TrendChart({ title, note, className = "viz-half", labels, tipTit
                   <text x={M.l - 8} y={y(t) + 4} textAnchor="end" className="viz-tick">{formatTick(t)}</text>
                 </g>
               ))}
-              {labels.map((l, i) => (!everyOther || i % 2 === n % 2 ? (
-                <text key={i} x={x(i)} y={H - 8} textAnchor="middle" className="viz-tick">{l}</text>
+              {labels.map((l, i) => ((n - 1 - i) % step === 0 ? (
+                <text key={i} x={x(i)} y={H - 8} textAnchor={i === n - 1 && step > 1 ? "end" : "middle"} className="viz-tick">{l}</text>
               ) : null))}
               {active !== null && <line x1={x(active)} x2={x(active)} y1={M.t} y2={M.t + innerH} className="viz-cross" />}
               {series.map(s => (

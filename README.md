@@ -65,7 +65,7 @@ The Edible - Store KPIs tab is the weekly operating report (`Report.xlsx`) as a 
 | `HQ_EDIBLE_TARGETS` | Each KPI's definition, target and green/yellow thresholds |
 | `HQ_EDIBLE_KSI_REVIEW` | The monthly score (-10 to +10) for each of the eight KSIs |
 
-Add a week with the form on that tab (or edit the tabs directly in the sheet); the scorecard recomputes everything else. A KPI with green/yellow thresholds is judged by them, a KPI with only a target is On track or Watch, and net sales is judged against that week's own sales target. The first column of each tab must stay unique per row.
+Manage weeks from the scorecard: **＋ Add week**, **Edit** and **Delete** sit beside the week picker (and on every row of the "All weeks" list, which shows 12 at a time, newest first, can be filtered by year, and flags any week that was skipped). Editing saves only the fields you changed. You can also edit the tabs directly in the sheet. Either way the scorecard recomputes everything else. A KPI with green/yellow thresholds is judged by them, a KPI with only a target is On track or Watch, and net sales is judged against that week's own sales target. The first column of each tab must stay unique per row.
 
 ## Checks
 
