@@ -125,7 +125,9 @@ export function invalidateBootstrapCache() {
  */
 async function nextWorkId(): Promise<string> {
   const sheetName = process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE";
-  const rows = await readSheet(sheetName, 5, "U").catch(() => []);
+  // No fallback if this read fails (a busy moment, a dropped connection): guessing "W-001" would hand out an ID that
+  // already exists, and edits/deletes act on the first row with a matching ID. Let the save fail so it can be retried.
+  const rows = await readSheet(sheetName, 5, "U");
   const highest = rows.reduce((max, row) => {
     const match = /^W-(\d+)$/.exec(row.ID || "");
     return match ? Math.max(max, parseInt(match[1], 10)) : max;
@@ -133,10 +135,30 @@ async function nextWorkId(): Promise<string> {
   return `W-${String(highest + 1).padStart(3, "0")}`;
 }
 
+/**
+ * Google Sheets treats a typed value that starts with = + or @ as a formula. Nobody typing a task or a note means that,
+ * and a crafted one could read other cells or call out to the web. A leading apostrophe stores it as plain text
+ * (the apostrophe itself isn't kept). Numbers, dates and negative numbers are left alone.
+ */
+const asText = (v: unknown): unknown => (typeof v === "string" && /^[=+@]/.test(v) ? `'${v}` : v);
+
+/** "A", "B", ... "Z", "AA" for a 0-based column index. */
+function columnLetter(index: number): string {
+  let s = "";
+  for (let n = index + 1; n > 0; n = Math.floor((n - 1) / 26)) s = String.fromCharCode(65 + ((n - 1) % 26)) + s;
+  return s;
+}
+
+// Optional fields default to what every new item has always had, so existing callers (Capture) behave exactly as before.
+// A yes/no cell only ever becomes "Yes" or "No", whatever the caller sent.
+const yesNo = (v: string | undefined, fallback: "Yes" | "No") => (v === undefined || v === "" ? fallback : /^y/i.test(v) ? "Yes" : "No");
+
 export async function addWork(item: SheetRow) {
   if (await isDemoData()) return { ok: true, source: "demo" as const, id: `W-${Date.now()}` };
   const id = await nextWorkId();
-  await (await getSheets()).spreadsheets.values.append({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE"}!A:U`, valueInputOption: "USER_ENTERED", requestBody: { values: [[id, item["Project / Function"], item["Work Item / Next Action"], item.Owner, "Action", item.Priority || "PUSH", "No", "Yes", item["Due Date"], "Open", "", "No", "", "", new Date().toISOString(), new Date().toISOString(), "No", "", "", "", "0d"]] } });
+  const now = new Date().toISOString();
+  const row = [id, item["Project / Function"], item["Work Item / Next Action"], item.Owner, item.Type || "Action", item.Priority || "PUSH", yesNo(item["Critical Move?"], "No"), "Yes", item["Due Date"], "Open", "", "No", "", "", now, now, yesNo(item["Management Escalation?"], "No"), "", item["WHY / OUTCOME SUPPORTED"] || "", "", "0d"].map(asText);
+  await (await getSheets()).spreadsheets.values.append({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${process.env.GOOGLE_WORK_SHEET ?? "WORK DESK — UPDATE"}!A:U`, valueInputOption: "USER_ENTERED", requestBody: { values: [row] } });
   invalidateBootstrapCache();
   return { ok: true, source: "sheets" as const, id };
 }
@@ -148,9 +170,15 @@ async function updateRow(sheetName: string, headerRow: number, width: string, id
   const headers = values?.[0] ?? [];
   const rowIndex = values?.findIndex((row, index) => index > 0 && row[0] === id) ?? -1;
   if (rowIndex < 0) throw new Error(`Row not found: ${id}`);
-  const row = [...(values?.[rowIndex] ?? [])];
-  Object.entries(changes).forEach(([header, value]) => { const column = headers.indexOf(header); if (column >= 0) row[column] = value; });
-  await sheets.spreadsheets.values.update({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${sheetName}!A${headerRow + rowIndex}:${width}${headerRow + rowIndex}`, valueInputOption: "USER_ENTERED", requestBody: { values: [row] } });
+  // Write ONLY the cells that changed. Rewriting the whole row from what the sheet displays would flatten formulas,
+  // re-date dates shown without a year, round numbers to their display format, and turn text that merely looks like
+  // a formula into a real one.
+  const sheetRow = headerRow + rowIndex;
+  const data = Object.entries(changes).flatMap(([header, value]) => {
+    const column = headers.indexOf(header);
+    return column >= 0 ? [{ range: `'${sheetName.replace(/'/g, "''")}'!${columnLetter(column)}${sheetRow}`, values: [[asText(value)]] }] : [];
+  });
+  if (data.length) await sheets.spreadsheets.values.batchUpdate({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, requestBody: { valueInputOption: "USER_ENTERED", data } });
   invalidateBootstrapCache();
   return { ok: true, source: "sheets" as const, id };
 }
@@ -321,7 +349,7 @@ export async function appendAnyRow(sheetName: string, obj: Record<string, string
   const sheets = await getSheets();
   const headResp = await sheets.spreadsheets.values.get({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${sheetName}!A1:Z1` });
   const headers = (headResp.data.values?.[0] ?? []) as string[];
-  const row = headers.map(h => obj[h] ?? "");
+  const row = headers.map(h => asText(obj[h] ?? ""));
   await sheets.spreadsheets.values.append({ spreadsheetId: process.env.GOOGLE_SHEETS_ID, range: `${sheetName}!A:Z`, valueInputOption: "USER_ENTERED", requestBody: { values: [row] } });
   invalidateBootstrapCache();
   return { ok: true, source: "sheets" as const };
