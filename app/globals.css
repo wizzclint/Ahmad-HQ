@@ -200,3 +200,69 @@
 .kpis.kpis-5{grid-template-columns:repeat(5,1fr)}
 @media(max-width:1000px){.kpis.kpis-5{grid-template-columns:repeat(3,1fr)}}
 @media(max-width:800px){.kpis.kpis-5{grid-template-columns:1fr}}
+/* ── Gardenia's Fire sales pipeline ── */
+.pipe-toolbar{align-items:center;display:flex;flex-wrap:wrap;gap:8px 10px;margin-bottom:8px}
+.pipe-toolbar .grow{flex:1 1 200px;min-width:0}
+.pipe-toolbar input[type=search],.pipe-toolbar select,.acct-move,.acct-move-label select{background:#fff;border:1px solid var(--line);border-radius:9px;font:inherit;max-width:100%;padding:7px 9px}
+.stage-strip{margin:0 0 10px}
+.stage-chip{background:#eef1f0;border-radius:99px;color:#3a4a45;display:inline-block;font-size:11px;font-weight:700;padding:3px 10px;white-space:nowrap}
+.stage-chip.s1{background:var(--blue);color:#275f9b}
+.stage-chip.s2{background:var(--lav);color:#5b3f9a}
+.stage-chip.s3{background:var(--sage);color:var(--good)}
+.stage-chip.s4{background:var(--yellow);color:var(--warn)}
+.stage-chip.s5{background:var(--peach);color:#9a5a2a}
+.stage-chip.s6{background:var(--mint);color:var(--good)}
+.stage-chip.s7{background:var(--good);color:#fff}
+.due-chip{background:#eef1f0;border-radius:99px;color:var(--muted);display:inline-block;font-size:11px;font-weight:700;padding:3px 9px;white-space:nowrap}
+.due-chip.overdue{background:var(--coral);color:var(--bad)}
+.due-chip.today{background:var(--yellow);color:var(--warn)}
+.due-chip.week{background:var(--sage);color:var(--good)}
+.acct-name{background:none;border:0;color:var(--navy);cursor:pointer;font:inherit;font-weight:800;padding:0;text-align:left}
+.acct-name:hover{text-decoration:underline}
+.fu-group{margin-top:12px}
+.fu-group:first-child{margin-top:0}
+.fu-group h3{align-items:center;color:#234e69;display:flex;font-size:13px;gap:8px;margin:0 0 4px}
+.fu-row{align-items:center;border-top:1px solid #edf1ef;display:grid;gap:6px 12px;grid-template-columns:minmax(0,1fr) auto;padding:9px 0}
+.fu-main{min-width:0}
+.fu-meta{align-items:center;color:var(--muted);display:flex;flex-wrap:wrap;font-size:12px;gap:2px 10px;margin-top:3px}
+.fu-actions{display:flex;flex-wrap:wrap;gap:6px;justify-content:flex-end}
+@media(max-width:600px){.fu-row{grid-template-columns:minmax(0,1fr)}.fu-actions{justify-content:flex-start}}
+.sales-board{grid-auto-columns:minmax(232px,252px);grid-auto-flow:column;grid-template-columns:none}
+.acct-card{gap:5px}
+.acct-card .acct-name{font-size:.86rem;line-height:1.3}
+.acct-card .kanban-card-actions{align-items:center;flex-wrap:wrap;justify-content:space-between}
+.acct-move{font-size:12px;max-width:150px;padding:3px 5px}
+.acct-table th,.acct-table td{max-width:260px;overflow:hidden;text-overflow:ellipsis}
+.acct-table tbody th{background:#fff;left:0;max-width:220px;position:sticky;white-space:normal}
+.acct-table thead th{padding:0}
+.sort-btn{background:none;border:0;color:inherit;cursor:pointer;font:inherit;font-weight:800;padding:6px 10px;text-align:left;text-transform:inherit;white-space:nowrap;width:100%}
+.sort-btn:hover{background:var(--sage)}
+.acct-top{align-items:center;display:flex;flex-wrap:wrap;gap:10px;justify-content:space-between;margin-bottom:8px}
+.acct-move-label{align-items:center;display:flex;gap:6px}
+.acct-group{border-top:1px solid #edf1ef;margin-top:10px;padding-top:8px}
+.acct-group h3{align-items:center;color:#234e69;display:flex;font-size:13px;gap:8px;margin:0 0 6px}
+.acct-list{display:grid;margin:0}
+.acct-row{align-items:baseline;border-top:1px solid #f3f6f4;display:grid;gap:2px 14px;grid-template-columns:minmax(150px,220px) minmax(0,1fr);padding:6px 0}
+.acct-row:first-child{border-top:0}
+.acct-row dt{color:var(--muted);font-size:12px;font-weight:800}
+.acct-row dt small{display:block;font-size:11px;font-weight:400}
+.acct-row dd{margin:0;min-width:0;overflow-wrap:anywhere}
+.acct-view .muted{color:var(--muted)}
+.acct-notes p{margin:0 0 4px}
+.acct-actions{flex-wrap:wrap;justify-content:flex-start;margin-top:12px}
+@media(max-width:600px){.acct-row{grid-template-columns:minmax(0,1fr)}}
+.acct-form{max-width:none}
+.acct-fieldset{border:1px solid var(--line);border-radius:10px;margin:0;min-width:0;padding:8px 10px 10px}
+.acct-fieldset legend{color:#234e69;font-size:12px;font-weight:800;padding:0 6px;text-transform:uppercase}
+.acct-fieldset .form-grid{max-width:none}
+.acct-follow{display:grid;gap:10px;grid-template-columns:1fr 1fr}
+.acct-follow .full{grid-column:1/-1}
+@media(max-width:800px){.acct-follow{grid-template-columns:1fr}}
+.month-test{background:var(--sage);border-radius:10px;margin:8px 0 10px;padding:9px 12px}
+.store-health .kpis{margin:10px 0}
+.explain-details{margin:8px 0 0}
+.explain-details summary{color:#275f9b;cursor:pointer;font-size:12px;font-weight:700}
+.explain-details .explain-list{margin-top:8px}
+.form-grid select{background:#fff;border:1px solid var(--line);border-radius:8px;font:inherit;max-width:100%;padding:9px}
+.store-health .mini-row .link-button{flex:none;white-space:nowrap}
+@media(max-width:800px){.kpis.kpis-5.pipe-kpis{grid-template-columns:1fr 1fr}.pipe-kpis>:last-child{grid-column:1/-1}}

@@ -1,4 +1,5 @@
 import type { HqBootstrap, SheetRow } from "./hq-types";
+import { SALES_STAGE_DEFS } from "./hq-pipeline";
 
 // Pure progress maths for the Home charts. Kept free of React and of app/page.tsx
 // so it can be tested on its own against a snapshot of the sheet data.
@@ -85,16 +86,7 @@ export function overallProgress(areas: AreaProgress[]) {
 }
 
 // Gardenia's Fire sales funnel, in order. A stage that matches nothing falls back to the first, like the board.
-export const SALES_STAGES: { label: string; test: RegExp | null }[] = [
-  { label: "To Research", test: null },
-  { label: "Priority", test: /priority/ },
-  { label: "Attempted", test: /attempt/ },
-  { label: "Qualified", test: /qualif/ },
-  { label: "Tasting Scheduled", test: /tasting sched/ },
-  { label: "Tasting Completed", test: /tasting comp/ },
-  { label: "First Order Won", test: /first order/ },
-  { label: "Recurring Won", test: /recurring/ },
-];
+export const SALES_STAGES: { label: string; test: RegExp | null }[] = SALES_STAGE_DEFS.map(s => ({ label: s.label, test: s.test ?? null }));
 
 export function pipelineCounts(rows: SheetRow[]): { label: string; value: number }[] {
   const counts = SALES_STAGES.map(s => ({ label: s.label, value: 0 }));

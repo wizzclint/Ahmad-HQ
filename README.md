@@ -54,6 +54,9 @@ Set the same variables in the project's Environment Variables, including `GOOGLE
 | `lib/hq-progress.ts` | The maths behind the progress charts |
 | `lib/hq-scorecard.ts` | The store scorecard maths: average ticket, labor %, status colours and so on, computed from the raw weekly numbers |
 | `lib/hq-schemas.ts` | Columns of the tabs the app itself owns (`HQ_EDIBLE_*`) |
+| `app/gardenia.tsx` | Gardenia's Fire sales pipeline: account card, add / edit, "Log a touch", follow-ups, board, summary, KPI numbers and the guided Weekly Closing |
+| `lib/hq-pipeline.ts` | The pipeline rules: stages, finding columns by name, reading follow-up dates, follow-up groups, the client's headline numbers, weekly movement |
+| `app/modal.tsx` | The dialog shared by the Edible and Gardenia's Fire screens |
 
 ## Edible store scorecard
 
@@ -74,6 +77,18 @@ Manage weeks from the scorecard: **＋ Add week**, **Edit** and **Delete** sit b
 - **A number that is off track leads to an action.** **＋ Action** beside a flagged number creates an ordinary Work item under "Edible Operations" (who, by when, expected result, and whether it needs Ahmad's decision, which also shows on Home). The number it answers is kept in the item's "WHY / OUTCOME SUPPORTED" cell as `KPI: <name> — <expected result>`, so the action is listed under that number, and the KPIs tab has an "Actions in progress" list of the store's open work.
 - **Summary** opens with "Store health": the latest week's colour counts, four headline numbers and what needs attention.
 - **Weekly Closing** walks through the week: the numbers, what they say, what is being done about it, then the wrap-up. "Fill in from the numbers and actions" drafts the four boxes (misses from the flagged numbers, blockers from actions that need a decision or are blocked, next week from the other open actions). The wrap-up is saved under the ISO week of the week being closed, with the week's headline numbers kept in it.
+
+## Gardenia's Fire sales pipeline
+
+The Sales Pipeline tab reads `HQ_GARDENIA_PIPELINE` (one row per prospect; the first column, the account name, is its key). Columns are found **by name**, so a column the client adds or renames still appears on the account card, the form and the "All columns" table without a code change; the standard twelve are Account / Prospect, Stage, Contact / Company, Last Contact, Next Follow-up, Tasting / Sample, Standing Cadence, Revenue / Value, Risk, Owner, Source / Evidence and Notes.
+
+- **Three views:** *Follow-ups* (default: overdue, today, this week, later, no date), *Board* (the eight stages in one row that scrolls sideways; drag a card, or use its Move-to dropdown on a phone) and *All columns* (every column, sortable). Search and a "My accounts" filter apply to all three.
+- **The account card** shows every column in five groups (Who, Where it stands, Follow-up, Offer, Evidence and notes), with its tasks and recent activity, and is where an account is edited or deleted. Anything the sheet has that fits no group goes under "More details".
+- **Log a touch** is one action that stamps Last Contact with today, adds a dated line to the top of Notes (`2026-09-24 · Cathy · Call (reached): …`), sets the next follow-up and can move the stage. Nothing moves unless the person leaves the suggestion selected.
+- **Follow-up dates:** the sheet's Next Follow-up column is free text, so the app reads a date only when it is complete (`2026-09-30`, `9/30/2026`, `Sep 30, 2026`) and never guesses. It writes `2026-09-30 · what happens`; older text with no date shows under "No date set".
+- **History:** stage moves, touches and new accounts are written to `HQ_ACTIVITY` (`Stage Moved`, `Touch Logged`, `Account Added`, Source Type `HQ_GARDENIA_PIPELINE`). Weekly Closing and the "reached someone" count are read from it; Home's Recent Activity shows moves and new accounts.
+- **Connected to the rest of the page:** Summary shows the client's own numbers (Prospects Identified, Contacts Made, Tastings, Standing Accounts; Weekly Revenue says "Not reported" until orders are connected), this month's test and what is due; KPIs adds the stage funnel; **＋ Task** on an account makes a Gardenia task whose Notes cell starts `Account: <name>` (that tag is how the account finds its tasks); moving an account to First Order Won offers to add it to Customers; Weekly Closing drafts wins, misses, blockers and next steps from the week's movement and saves the wrap-up under that ISO week.
+- **This month's test** is kept as a `HQ_NOTES` row with Source Type `MONTH TEST`; the newest one is shown and anyone can update it from the Summary.
 
 ## Checks
 

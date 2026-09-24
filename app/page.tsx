@@ -7,6 +7,8 @@ import { areaProgress, overallProgress, pipelineCounts, weeklyActivity } from "@
 import { ProgressPanel } from "./charts";
 import { AppShell, type NavSection } from "./shell";
 import { CloseTheWeek, EdibleScorecard, EdibleWorkspace, StoreHealth, type NewAction } from "./edible";
+import { CloseSalesWeek, PipelineHealth, PipelineKpis, PipelineTab, PipelineWorkspace, type NewAccountTask, type PipelineActions } from "./gardenia";
+import { PIPELINE_SHEET, accountTag, monthTestRow, taskTitle } from "@/lib/hq-pipeline";
 import { APP_SHEETS } from "@/lib/hq-schemas";
 
 type View =
@@ -120,6 +122,12 @@ function AsyncButton({ onClick, children, pendingLabel = "Working…", className
 
 const closed = (v = "") => /done|complete|closed/i.test(v);
 
+// The dedicated task sheets don't assign their own ids, so a new row gets one from the clock.
+const newTaskId = (prefix: string) => `${prefix}-${Date.now().toString(36).toUpperCase()}`;
+
+// How Home's Recent Activity names each kind of history entry it shows.
+const ACTIVITY_LABEL: Record<string, string> = { "Task Completed": "Completed", "Stage Moved": "Moved", "Account Added": "Added" };
+
 // ── Kanban pipelines ─────────────────────────────────────────────────────
 // A pipeline is an ordered list of stages — that order is both the column
 // display order and (for stages with a `test`) the match-priority order.
@@ -154,19 +162,6 @@ const GARDENIA_PIPELINE: Pipeline = [
   { id: "inProgress", label: "In Progress", test: /progress/ },
   { id: "inReview", label: "In Review / Testing", test: /review|test/ },
   { id: "done", label: "Done", test: /done|complete/ },
-];
-
-// Sales pipeline stages, distinct from GARDENIA_PIPELINE's task-tracking
-// stages — this tracks prospects/accounts through the actual sales cycle.
-const SALES_PIPELINE: Pipeline = [
-  { id: "toResearch", label: "To Research" },
-  { id: "priority", label: "Priority", test: /priority/ },
-  { id: "attempted", label: "Attempted", test: /attempt/ },
-  { id: "qualified", label: "Qualified", test: /qualif/ },
-  { id: "tastingScheduled", label: "Tasting Scheduled", test: /tasting sched/ },
-  { id: "tastingCompleted", label: "Tasting Completed", test: /tasting comp/ },
-  { id: "firstOrderWon", label: "First Order Won", test: /first order/ },
-  { id: "recurringWon", label: "Recurring Won", test: /recurring/ },
 ];
 
 // ── Capture / Inbox routing ─────────────────────────────────────────────────
@@ -889,10 +884,10 @@ function Home({ data, onSave, onDelete }: { data: HqBootstrap; onSave: (u: Sheet
       <Section title="Recent Activity">
         {(() => {
           const recent = [...data.activity]
-            .filter(r => r["Action Type"] === "Task Assigned" || r["Action Type"] === "Task Completed")
+            .filter(r => ["Task Assigned", "Task Completed", "Stage Moved", "Account Added"].includes(r["Action Type"]))
             .sort((a, b) => new Date(b.Timestamp || 0).getTime() - new Date(a.Timestamp || 0).getTime())
             .slice(0, 8);
-          if (!recent.length) return <p className="sub">No activity recorded yet — assigned and completed tasks will show up here.</p>;
+          if (!recent.length) return <p className="sub">No activity recorded yet — assigned and completed tasks, and sales accounts that move or are added, will show up here.</p>;
           return (
             <div style={{ overflowX: "auto" }}>
               <table style={{ width: "100%", borderCollapse: "collapse", fontSize: "0.82rem" }}>
@@ -900,7 +895,7 @@ function Home({ data, onSave, onDelete }: { data: HqBootstrap; onSave: (u: Sheet
                 <tbody>{recent.map((r, i) => (
                   <tr key={i} style={{ background: i % 2 ? "#f8f9fb" : "#fff", borderBottom: "1px solid #e8eaf0" }}>
                     <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r.Timestamp ? new Date(r.Timestamp).toLocaleString() : "—"}</td>
-                    <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r["Action Type"] === "Task Completed" ? "Completed" : "Assigned"}</td>
+                    <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{ACTIVITY_LABEL[r["Action Type"]] ?? "Assigned"}</td>
                     <td style={{ padding: "6px 10px", whiteSpace: "nowrap" }}>{r["Business / Area"] || "—"}</td>
                     <td style={{ padding: "6px 10px" }}>{r.Detail || "—"}</td>
                   </tr>
@@ -924,7 +919,6 @@ export default function HomePage() {
   const [areaTab, setAreaTab] = useState<Record<string, string>>({});
   const [captureArea, setCaptureArea] = useState("");
   const [gardeniaTasksBoardView, setGardeniaTasksBoardView] = useState(true);
-  const [gardeniaPipelineBoardView, setGardeniaPipelineBoardView] = useState(true);
   const [ironTasksBoardView, setIronTasksBoardView] = useState(true);
   const [areaWorkBoardView, setAreaWorkBoardView] = useState(true);
   const [assigning, setAssigning] = useState(false);
@@ -1224,6 +1218,45 @@ export default function HomePage() {
     notify(`Action added for ${a.owner}`);
   }
 
+  // A task made from a sales account: an ordinary Gardenia task whose Notes cell names the account (that tag is
+  // how the account finds its tasks again). Throws on failure so the dialog stays open.
+  async function createAccountTask(t: NewAccountTask) {
+    const route = CAPTURE_ROUTES.gardenia;
+    if (route.kind !== "generic") return;
+    const id = newTaskId(route.idPrefix);
+    const title = taskTitle(t.description, t.account);
+    const row: SheetRow = {
+      ID: id,
+      ...route.buildRow({ description: title, assignee: t.owner, due: t.due, priority: t.priority }),
+      Description: t.description,
+      Notes: accountTag(t.account),
+    };
+    await addAnyRow(route.sheet, row, null);
+    try {
+      await addAnyRow("HQ_ACTIVITY", {
+        Timestamp: new Date().toISOString(),
+        User: session?.user?.name || "Ahmad",
+        "Action Type": "Task Assigned",
+        "Business / Area": route.label,
+        "Source Type": route.sheet,
+        "Source ID": id,
+        Detail: `${title} → ${t.owner}`,
+      }, null);
+    } catch { /* history log is best-effort */ }
+    notify(`Task added for ${t.owner}`);
+  }
+
+  // What the sales pipeline screens can do: each one saves through the same generic API as the rest of the app.
+  const pipelineActions: PipelineActions = {
+    addAccount: row => addAnyRow(PIPELINE_SHEET, row, "Account added"),
+    updateAccount: (key, changes, message) => updateAnyRow(PIPELINE_SHEET, key, changes, message),
+    deleteAccount: key => deleteAnyRow(PIPELINE_SHEET, key, "Account deleted"),
+    logActivity: row => { addAnyRow("HQ_ACTIVITY", row, null).catch(() => { /* best-effort: the change itself already saved */ }); },
+    createTask: createAccountTask,
+    createCustomer: row => addAnyRow("HQ_CUSTOMERS", row, `${row.Customer} added to Customers`),
+    saveMonthTest: text => addAnyRow("HQ_NOTES", monthTestRow(text, session?.user?.name || "Ahmad", new Date()), "This month’s test saved"),
+  };
+
   const nav = (v: View) => {
     if (v === "add") setCaptureArea("");
     setView(v);
@@ -1317,16 +1350,6 @@ export default function HomePage() {
 
   // Business-specific headline numbers, shared by the Summary and KPIs tabs.
   function areaSpotlight(viewId: string, cfg: AreaPage): { label: string; value: string | number; detail: string; tone: string }[] {
-    if (viewId === "gardenia") {
-      const stageIdx = (r: SheetRow) => SALES_PIPELINE.findIndex(s => s.id === bucketFor(r.Stage, SALES_PIPELINE));
-      const reached = (id: string) => data.gardeniaPipeline.filter(r => stageIdx(r) >= SALES_PIPELINE.findIndex(s => s.id === id)).length;
-      return [
-        { label: "Accounts", value: data.gardeniaPipeline.length, detail: "In the sales pipeline", tone: "lav" },
-        { label: "Qualified", value: reached("qualified"), detail: "Qualified or further along", tone: "blue" },
-        { label: "Tastings", value: reached("tastingScheduled"), detail: `${reached("tastingCompleted")} completed`, tone: "sage" },
-        { label: "First orders", value: reached("firstOrderWon"), detail: `${reached("recurringWon")} recurring`, tone: "mint" },
-      ];
-    }
     if (viewId === "store") {
       const runs = data.checklistRuns.filter(r => cfg.business.test(r.Business || ""));
       // Only checklists someone has started count: a run that was scheduled but never opened isn't 0% "done", it's not in use yet.
@@ -1357,6 +1380,7 @@ export default function HomePage() {
     return (
       <>
         {viewId === "store" && <StoreHealth onOpenKpis={() => setAreaTab(cur => ({ ...cur, store: "kpi" }))} />}
+        {viewId === "gardenia" && <PipelineHealth onOpenPipeline={() => setAreaTab(cur => ({ ...cur, gardenia: "pipeline" }))} />}
         <section className="kpis">
           <Kpi label="Open tasks" value={s.open.length} detail={`${s.total} total`} tone="sage" />
           <Kpi label="In progress" value={s.inProgress.length} detail="Being worked on now" tone="blue" />
@@ -1451,36 +1475,6 @@ export default function HomePage() {
     );
   }
 
-  function gardeniaPipelineTab() {
-    return (
-      <>
-        <StatusSummary rows={data.gardeniaPipeline} pipeline={SALES_PIPELINE} statusField="Stage" />
-        <section className="card">
-          <div className="list-toolbar">
-            <span className="sub">{data.gardeniaPipeline.length} accounts</span>
-            <div className="chips">
-              <button className={`chip ${gardeniaPipelineBoardView ? "selected" : ""}`} onClick={() => setGardeniaPipelineBoardView(true)}>▤ Board</button>
-              <button className={`chip ${!gardeniaPipelineBoardView ? "selected" : ""}`} onClick={() => setGardeniaPipelineBoardView(false)}>☰ List</button>
-            </div>
-          </div>
-          {gardeniaPipelineBoardView ? (
-            <KanbanBoard
-              rows={data.gardeniaPipeline}
-              statusField="Stage"
-              pipeline={SALES_PIPELINE}
-              onMove={(row, stage) => updateAnyRow("HQ_GARDENIA_PIPELINE", row["Account / Prospect"], { Stage: stage }, `${row["Account / Prospect"]} moved to ${stage}`)}
-              renderCard={row => (
-                <GenericKanbanCard row={row} sheetName="HQ_GARDENIA_PIPELINE" titleField="Account / Prospect" subtitleFields={["Contact / Company", "Revenue / Value"]} pipeline={SALES_PIPELINE} statusField="Stage" onUpdate={updateAnyRow} onDelete={deleteAnyRow} />
-              )}
-            />
-          ) : (
-            edt("HQ_GARDENIA_PIPELINE", data.gardeniaPipeline, ["Account / Prospect", "Stage", "Contact / Company", "Revenue / Value", "Risk", "Next Follow-up", "Owner"], undefined, SALES_PIPELINE, "Stage")
-          )}
-        </section>
-      </>
-    );
-  }
-
   function areaClosingTab(cfg: AreaPage) {
     const wk = isoWeekKey();
     const belongs = (r: SheetRow) => cfg.business.test(r.Business || "");
@@ -1500,14 +1494,16 @@ export default function HomePage() {
       }, `${weekKey} wrap-up saved for ${cfg.label}`);
     };
     const isStore = cfg.captureKey === "edible";
+    const isGardenia = cfg.captureKey === "gardenia";
     return (
       <>
         {isStore && <CloseTheWeek wraps={wraps} onSave={saveWrapUp} />}
+        {isGardenia && <CloseSalesWeek wraps={wraps} onSave={saveWrapUp} />}
         <Section title="Checklists for this business">
           {areaTable("HQ_CHECKLIST_RUNS", data.checklistRuns, belongs, ["Checklist Name", "Period Key", "Status", "Completion %", "On Time?", "Owner"], { Business: cfg.label })}
           <p className="sub" style={{ marginBottom: 0 }}>{runs.length} run{runs.length === 1 ? "" : "s"} recorded. Use “Run Maintenance” in the sidebar to generate the missing daily/weekly checklists.</p>
         </Section>
-        {!isStore && (
+        {!isStore && !isGardenia && (
           <Section title={`Weekly wrap-up · ${wk}`}>
             <WeeklyWrapUpForm weekKey={wk} onSave={saveWrapUp} />
           </Section>
@@ -1553,6 +1549,7 @@ export default function HomePage() {
     const spotlight = areaSpotlight(viewId, cfg);
     return (
       <>
+        {viewId === "gardenia" && <PipelineKpis />}
         <section className="kpis">
           <Kpi label="Task completion" value={`${s.pct}%`} detail={`${s.done.length} of ${s.total} done`} tone="mint" />
           <Kpi label="Open tasks" value={s.open.length} detail="Still to do" tone="sage" />
@@ -1575,7 +1572,7 @@ export default function HomePage() {
     switch (tab) {
       case "summary": return areaSummaryTab(viewId, cfg);
       case "tasks": return areaTasksTab(viewId, cfg);
-      case "pipeline": return gardeniaPipelineTab();
+      case "pipeline": return <PipelineTab />;
       case "closing": return areaClosingTab(cfg);
       case "kpi": return areaKpiTab(viewId, cfg);
       case "product": return <Section title="Product & Pricing">{edt("HQ_GARDENIA_PRODUCT", data.gardeniaProduct, ["Product / Test", "Test Status", "Unit Cost", "Price", "Target Margin", "Actual Margin", "Owner"])}</Section>;
@@ -1589,7 +1586,10 @@ export default function HomePage() {
       );
       case "customers": return (
         <>
-          <Section title="Customers">{areaTable("HQ_CUSTOMERS", data.customers, belongs, ["Date", "Customer", "Type", "Revenue", "Relationship Stage", "Next Action", "Owner"], defaults)}</Section>
+          <Section title="Customers">
+            {viewId === "gardenia" && <p className="sub" style={{ marginTop: 0 }}>Prospects live in the Sales Pipeline. This list is for accounts that have bought: moving a pipeline card to First Order Won offers to add it here.</p>}
+            {areaTable("HQ_CUSTOMERS", data.customers, belongs, ["Date", "Customer", "Type", "Revenue", "Relationship Stage", "Next Action", "Owner"], defaults)}
+          </Section>
           {viewId === "gardenia"
             ? <Section title="Follow-ups">{areaTable("HQ_CUSTOMER_FOLLOWUP", data.customerFollowup, belongs, ["Follow-up ID", "Customer / Recipient", "Priority", "Due", "Status", "Next Action", "Owner"], defaults)}</Section>
             : <Section title="Reviews">{areaTable("HQ_REVIEWS", data.reviews, belongs, ["Date", "Platform", "Rating", "Theme", "Severity", "Response Status", "Owner"], defaults)}</Section>}
@@ -1614,6 +1614,24 @@ export default function HomePage() {
         {renderAreaTab(viewId, cfg, tab)}
       </>
     );
+    if (viewId === "gardenia") {
+      // Gardenia's Fire: its tabs share one workspace (the accounts, their history and the account dialogs).
+      const owners = [...new Set([...data.gardeniaPipeline.map(r => r.Owner), ...data.gardeniaTasks.map(r => r.Owner), ...data.people.map(p => p.Name)].map(s => (s || "").trim()).filter(Boolean))].sort();
+      return (
+        <PipelineWorkspace
+          rows={data.gardeniaPipeline}
+          activity={data.activity}
+          tasks={data.gardeniaTasks}
+          customers={data.customers}
+          notes={data.notes}
+          owners={owners}
+          me={session?.user?.name || ""}
+          actions={pipelineActions}
+        >
+          {page}
+        </PipelineWorkspace>
+      );
+    }
     if (viewId !== "store") return page;
     // Edible - Store: its tabs share one workspace (the weeks, targets, open actions and the add/edit dialogs).
     const owners = [...new Set([...data.work.map(r => r.Owner), ...data.people.map(p => p.Name)].map(s => (s || "").trim()).filter(Boolean))].sort();
