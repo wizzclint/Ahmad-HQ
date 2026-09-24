@@ -38,6 +38,54 @@ export function parseDate(v: string | undefined | null): Date | null {
 const div = (a: number | null, b: number | null) => (a === null || b === null || b === 0 ? null : a / b);
 const rel = (a: number | null, b: number | null) => (a === null || b === null || b === 0 ? null : a / b - 1);
 
+// ── sales by channel: direct store, corporate, online ─────────────────────────
+
+/** The sheet's channel columns. `combined` is the older single "Corporate / Online" figure, still read for weeks entered that way. */
+export const CHANNEL_COLUMNS = { direct: "Direct Store Sales", corporate: "Corporate Sales", online: "Online Sales", combined: "Corporate / Online Sales" } as const;
+
+export type Channels = {
+  /** Dollars per channel. A channel is null when it is not known. */
+  direct: number | null;
+  corporate: number | null;
+  online: number | null;
+  /** Corporate and online together (what the older single figure held). */
+  corpOnline: number | null;
+  /** True when corporate and online are known separately. */
+  split: boolean;
+  /** Channels that were worked out (net sales minus the other two) rather than typed. */
+  derived: { direct?: true; corporate?: true; online?: true };
+};
+
+const cents = (v: number) => Math.round(v * 100) / 100;
+
+/**
+ * Where the week's sales came from. Type any two of direct store / corporate / online and the third is worked out
+ * from net sales; type all three and they are checked against net sales. A week entered the older way (one
+ * "Corporate / Online" figure) still works: direct is net sales minus that figure.
+ */
+export function channelSplit(row: Record<string, string | undefined>, net: number | null): Channels {
+  const d = parseNum(row[CHANNEL_COLUMNS.direct]), c = parseNum(row[CHANNEL_COLUMNS.corporate]), o = parseNum(row[CHANNEL_COLUMNS.online]);
+  const legacy = parseNum(row[CHANNEL_COLUMNS.combined]);
+  const typed = [d, c, o].filter(v => v !== null).length;
+  if (typed === 0) {
+    const rest = net !== null && legacy !== null ? cents(net - legacy) : null;
+    const direct = rest !== null && rest >= 0 ? rest : null; // a combined figure above net sales leaves no sensible direct figure; the form points that out
+    return { direct, corporate: null, online: null, corpOnline: legacy, split: false, derived: direct === null ? {} : { direct: true } };
+  }
+  let direct = d, corporate = c, online = o;
+  const derived: Channels["derived"] = {};
+  if (net !== null && typed === 2) {
+    const rest = cents(net - ((d ?? 0) + (c ?? 0) + (o ?? 0)));
+    if (rest >= 0) { // two channels already above net sales leave nothing sensible to work out; the form points that out
+      if (d === null) { direct = rest; derived.direct = true; }
+      else if (c === null) { corporate = rest; derived.corporate = true; }
+      else { online = rest; derived.online = true; }
+    }
+  }
+  const corpOnline = corporate !== null && online !== null ? cents(corporate + online) : direct !== null && net !== null ? cents(net - direct) : legacy;
+  return { direct, corporate, online, corpOnline, split: corporate !== null && online !== null, derived };
+}
+
 // ── weekly metrics ───────────────────────────────────────────────────────────
 
 export type WeekMetrics = {
@@ -55,8 +103,13 @@ export type WeekMetrics = {
   salesPerLaborHour: number | null;
   addOnAttach: number | null;
   refundVoidPct: number | null;
+  /** Share of net sales from corporate and online together (the "Online Sales Mix" KPI). */
   onlinePct: number | null;
   directPct: number | null;
+  /** Corporate and online shares on their own; null until the two are entered separately. */
+  corporatePct: number | null;
+  onlineOnlyPct: number | null;
+  channels: Channels;
   completionRate: number | null;
   targetVarDollars: number | null;
   targetVarPct: number | null;
@@ -72,7 +125,7 @@ export function weekMetrics(row: SheetRow, prevNetSales: number | null = null): 
   const salesTarget = parseNum(row["Sales Target"]);
   const lySales = parseNum(row["Same Week LY Sales"]);
   const orders = parseNum(row.Orders);
-  const online = parseNum(row["Corporate / Online Sales"]);
+  const channels = channelSplit(row, netSales);
   const refund = parseNum(row["Refund Amount"]);
   const voided = parseNum(row["Void Amount"]);
   return {
@@ -88,8 +141,11 @@ export function weekMetrics(row: SheetRow, prevNetSales: number | null = null): 
     salesPerLaborHour: div(netSales, parseNum(row["Labor Hours"])),
     addOnAttach: div(parseNum(row["Add-on Orders"]), orders),
     refundVoidPct: refund === null && voided === null ? null : div((refund ?? 0) + (voided ?? 0), netSales),
-    onlinePct: div(online, netSales),
-    directPct: netSales === null || online === null ? null : div(netSales - online, netSales),
+    onlinePct: div(channels.corpOnline, netSales),
+    directPct: div(channels.direct, netSales),
+    corporatePct: div(channels.corporate, netSales),
+    onlineOnlyPct: div(channels.online, netSales),
+    channels,
     completionRate: div(parseNum(row["Completed Orders"]), parseNum(row["Eligible Orders"])),
     targetVarDollars: netSales === null || salesTarget === null ? null : netSales - salesTarget,
     targetVarPct: rel(netSales, salesTarget),
@@ -170,9 +226,9 @@ export const KPIS: KpiDef[] = [
   { key: "completionRate", kpi: "Completion Rate", label: "Completion rate", kind: "pct1", value: m => m.completionRate,
     help: "Of the orders that could be fulfilled, how many were completed.", how: "Completed orders ÷ eligible orders." },
   { key: "directPct", kpi: "Direct Sales %", label: "Direct sales", kind: "pct1", value: m => m.directPct,
-    help: "The share of sales that did not come through corporate or online orders.", how: "(Net sales − corporate / online sales) ÷ net sales." },
+    help: "The share of sales rung up in the store itself, not through corporate or online orders.", how: "Direct store sales ÷ net sales. If direct store sales aren't typed, it is net sales minus corporate and online sales." },
   { key: "onlinePct", kpi: "Online Sales Mix", label: "Online sales mix", kind: "pct1", value: m => m.onlinePct,
-    help: "The share of sales that came through corporate or online orders.", how: "Corporate / online sales ÷ net sales." },
+    help: "The share of sales that came through corporate and online orders together.", how: "(Corporate sales + online sales) ÷ net sales. The split between the two is in “Sales by channel”." },
 ];
 
 /** What a number means, from the targets sheet (falling back to the built-in wording). */
@@ -328,6 +384,77 @@ export function statusCounts(tiles: Tile[]): { on: number; watch: number; off: n
   };
 }
 
+// ── "Sales by channel": each channel's dollars, share of sales, and how it moved ─────────────────────────────
+
+export type ChannelKey = "direct" | "corporate" | "online" | "corpOnline";
+export type ChannelRow = {
+  key: ChannelKey;
+  label: string;
+  dollars: number | null;
+  /** Share of net sales (0..1). */
+  pct: number | null;
+  /** Worked out from net sales rather than typed. */
+  derived: boolean;
+  /** Against the entry before this week: dollars, percent, and the change in share in percentage points. */
+  dollarChange: number | null;
+  dollarChangePct: number | null;
+  pctChangePts: number | null;
+  /** The target share from the targets sheet (direct sales; corporate + online mix) and how far the share is from it, in points. */
+  target: number | null;
+  vsTargetPts: number | null;
+};
+export type ChannelView = {
+  rows: ChannelRow[];
+  split: boolean;
+  net: number | null;
+  /** The entry the changes are measured against, and how many weeks earlier it was (1 = the week before). */
+  previous: Date | null;
+  weeksBack: number;
+  /** One sentence putting corporate and direct side by side ("" until both are known). */
+  gap: string;
+};
+
+const CHANNEL_LABEL: Record<ChannelKey, string> = { direct: "Direct store", corporate: "Corporate", online: "Online", corpOnline: "Corporate + online together" };
+
+export function channelView(week: WeekMetrics, previous: WeekMetrics | null, targets: SheetRow[]): ChannelView {
+  const net = week.netSales;
+  const targetOf = (kpi: string) => parseNum(targets.find(t => (t.KPI || "").trim().toLowerCase() === kpi.toLowerCase())?.Target);
+  const dollarsOf = (m: WeekMetrics | null, key: ChannelKey): number | null => (m === null ? null : m.channels[key]);
+  const keys: ChannelKey[] = week.channels.split ? ["direct", "corporate", "online", "corpOnline"] : ["direct", "corpOnline"];
+  const rows: ChannelRow[] = keys.map(key => {
+    const dollars = dollarsOf(week, key), before = dollarsOf(previous, key);
+    const pct = div(dollars, net), beforePct = div(before, previous?.netSales ?? null);
+    const target = key === "direct" ? targetOf("Direct Sales %") : key === "corpOnline" ? targetOf("Online Sales Mix") : null;
+    return {
+      key,
+      label: key === "corpOnline" && !week.channels.split ? "Corporate + online (not split yet)" : CHANNEL_LABEL[key],
+      dollars, pct,
+      derived: key !== "corpOnline" && Boolean(week.channels.derived[key]),
+      dollarChange: dollars === null || before === null ? null : cents(dollars - before),
+      dollarChangePct: rel(dollars, before),
+      pctChangePts: pct === null || beforePct === null ? null : (pct - beforePct) * 100,
+      target,
+      vsTargetPts: pct === null || target === null ? null : (pct - target) * 100,
+    };
+  });
+  const { direct, corporate } = week.channels;
+  let gap = "";
+  if (direct !== null && corporate !== null && net) {
+    const diff = corporate - direct;
+    gap = `Corporate sales are ${formatValue("money0", Math.abs(diff))} ${diff >= 0 ? "more" : "less"} than direct store sales (${Math.abs((diff / net) * 100).toFixed(1)} points of net sales).`;
+  }
+  return { rows, split: week.channels.split, net, previous: previous?.weekEnding ?? null, weeksBack: previous ? missingWeeks(previous.weekEnding, week.weekEnding) + 1 : 0, gap };
+}
+
+/** "direct 3.0% · corporate 60.1% · online 27.7%" (corporate and online together when not split); "" when nothing is known. */
+export function channelMix(week: WeekMetrics): string {
+  const p = (v: number | null) => formatValue("pct1", v);
+  if (week.directPct === null && week.onlinePct === null) return "";
+  return week.channels.split
+    ? `direct ${p(week.directPct)} · corporate ${p(week.corporatePct)} · online ${p(week.onlineOnlyPct)}`
+    : `direct ${p(week.directPct)} · corporate + online ${p(week.onlinePct)}`;
+}
+
 // ── entering a week: suggestions and sanity checks ───────────────────────────
 
 /** ISO week key such as "2026-W35" for a UTC-midnight date (what parseDate returns), so the week never shifts with the viewer's time zone. */
@@ -382,8 +509,24 @@ export function weekWarnings(values: Record<string, string>, previous: WeekMetri
     if (labor !== null && labor > net) out.push(`Labor cost ${money(labor)} is more than net sales ${money(net)}.`);
     if (giveBack > net) out.push(`Refunds and voids (${money(giveBack)}) are more than net sales ${money(net)}.`);
     if (online !== null && online > net) out.push(`Corporate / online sales ${money(online)} are more than net sales ${money(net)}.`);
+
+    const typed = [CHANNEL_COLUMNS.direct, CHANNEL_COLUMNS.corporate, CHANNEL_COLUMNS.online].map(n);
+    const typedCount = typed.filter(v => v !== null).length;
+    const typedSum = typed.reduce<number>((s, v) => s + (v ?? 0), 0);
+    if (typedCount === 3 && Math.abs(typedSum - net) > 1) {
+      out.push(`Direct store, corporate and online sales add up to ${money(typedSum)}, but net sales is ${money(net)} (${money(Math.abs(typedSum - net))} ${typedSum > net ? "too much" : "short"}).`);
+    } else if (typedCount > 0 && typedCount < 3 && typedSum > net + 1) {
+      out.push(`The channel sales entered so far (${money(typedSum)}) are more than net sales ${money(net)}.`);
+    }
+    const direct = channelSplit(values, net).direct;
+    if (direct !== null && previous?.directPct != null) {
+      const pts = (direct / net - previous.directPct) * 100;
+      if (Math.abs(pts) >= 15) {
+        out.push(`Direct store sales work out to ${formatValue("pct1", direct / net)} of net sales, ${pts > 0 ? "up" : "down"} ${Math.abs(pts).toFixed(0)} points from last week's ${formatValue("pct1", previous.directPct)}. Check that the corporate and online figures are complete.`);
+      }
+    }
   }
-  const negative = ["Net Sales", "Sales Target", "Same Week LY Sales", "Orders", "Labor Hours", "Labor Cost", "Add-on Orders", "Refund Amount", "Void Amount", "Corporate / Online Sales", "Eligible Orders", "Completed Orders"]
+  const negative = ["Net Sales", "Sales Target", "Same Week LY Sales", "Orders", "Labor Hours", "Labor Cost", "Add-on Orders", "Refund Amount", "Void Amount", "Corporate / Online Sales", CHANNEL_COLUMNS.direct, CHANNEL_COLUMNS.corporate, CHANNEL_COLUMNS.online, "Eligible Orders", "Completed Orders"]
     .filter(name => (n(name) ?? 0) < 0);
   if (negative.length) out.push(`${negative.join(", ")} ${negative.length > 1 ? "are" : "is"} negative.`);
   return out;
@@ -438,7 +581,8 @@ export function wrapUpDraft(tiles: Tile[], flagged: { text: string }[], actions:
 export function numbersLine(week: WeekMetrics, tiles: Tile[], weekLabel: string): string {
   const v = (key: string) => tiles.find(t => t.key === key)?.valueText ?? "—";
   const vs = week.targetVarPct === null ? "" : ` (${week.targetVarPct >= 0 ? "+" : "−"}${Math.abs(week.targetVarPct * 100).toFixed(1)}% vs target)`;
-  return `Numbers for the week ending ${weekLabel}: net sales ${v("netSales")}${vs} · orders ${v("orders")} · labor ${v("laborPct")} · average ticket ${v("avgTicket")} · refund + void ${v("refundVoidPct")}.`;
+  const mix = channelMix(week);
+  return `Numbers for the week ending ${weekLabel}: net sales ${v("netSales")}${vs} · orders ${v("orders")} · labor ${v("laborPct")} · average ticket ${v("avgTicket")} · refund + void ${v("refundVoidPct")}${mix ? ` · sales mix: ${mix}` : ""}.`;
 }
 
 // ── monthly KSI review ───────────────────────────────────────────────────────

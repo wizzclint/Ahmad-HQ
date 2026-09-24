@@ -11,6 +11,9 @@ export const APP_SHEETS: Record<string, string[]> = {
     "Week Ending", "Net Sales", "Sales Target", "Same Week LY Sales", "Orders",
     "Labor Hours", "Labor Cost", "Add-on Orders", "Refund Amount", "Void Amount",
     "Corporate / Online Sales", "Eligible Orders", "Completed Orders", "Notes",
+    // Sales by channel. Type any two and the third is worked out. "Corporate / Online Sales" above is the older
+    // single figure, still read for weeks entered that way.
+    "Direct Store Sales", "Corporate Sales", "Online Sales",
   ],
   // Mirrors "Setup & Targets": what each KPI means, its target and its colour thresholds.
   HQ_EDIBLE_TARGETS: [

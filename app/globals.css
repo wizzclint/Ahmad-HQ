@@ -265,6 +265,19 @@
 .explain-details .explain-list{margin-top:8px}
 .form-grid select{background:#fff;border:1px solid var(--line);border-radius:8px;font:inherit;max-width:100%;padding:9px}
 .store-health .mini-row .link-button{flex:none;white-space:nowrap}
+.channel-live{background:var(--sage);border-radius:8px;color:var(--ink);font-size:13px;padding:8px 10px}
+.channel-live ul{margin:4px 0 0;padding-left:18px}
+.channel-table{border-collapse:collapse;font-size:13px;width:100%}
+.channel-table th,.channel-table td{border-top:1px solid #edf1ef;padding:6px 10px;text-align:left;white-space:nowrap}
+.channel-table thead th{border-top:0;color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase}
+.channel-table tbody th{font-weight:700}
+.channel-table tr.is-selected{background:var(--sage)}
+.channel-table tr.chan-sub th,.channel-table tr.chan-sub td{color:var(--muted);font-style:italic}
+.channel-table tr.chan-total th,.channel-table tr.chan-total td{border-top:2px solid var(--line);font-weight:800}
+.chan-good{color:var(--good)}
+.chan-bad{color:var(--bad)}
+.channel-line{font-size:13px;margin:10px 0 0}
+.channel-chip{display:inline-block;margin:0 12px 2px 0}
 a.btn,a.link-button{display:inline-block;text-decoration:none}
 a.btn{color:inherit}
 a.btn:hover{background:var(--sage)}
