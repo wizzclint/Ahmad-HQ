@@ -272,7 +272,6 @@
 .channel-table thead th{border-top:0;color:var(--muted);font-size:11px;font-weight:800;text-transform:uppercase}
 .channel-table tbody th{font-weight:700}
 .channel-table tr.is-selected{background:var(--sage)}
-.channel-table tr.chan-sub th,.channel-table tr.chan-sub td{color:var(--muted);font-style:italic}
 .channel-table tr.chan-total th,.channel-table tr.chan-total td{border-top:2px solid var(--line);font-weight:800}
 .chan-good{color:var(--good)}
 .chan-bad{color:var(--bad)}

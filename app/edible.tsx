@@ -4,8 +4,8 @@ import { Fragment, createContext, useContext, useMemo, useRef, useState, type Re
 import type { SheetRow } from "@/lib/hq-types";
 import {
   CHANNEL_COLUMNS, STATUS_LABEL, actionsForKpi, attention, channelSplit, channelView, formatValue, isoWeekKeyUTC, kpiTag, ksiSummary, missingWeeks,
-  numbersLine, openActions, parseDate, parseNum, scorecard, statusCounts, statusRule, weekAfter, weekBefore, weekWarnings, weekYears, weeklySeries, wrapUpDraft,
-  type ActionRow, type ChannelRow, type ChannelView, type Status, type Tile, type WeekMetrics,
+  numbersLine, openActions, parseDate, parseNum, salesVariance, scorecard, statusCounts, statusRule, weekAfter, weekBefore, weekWarnings, weekYears, weeklySeries, wrapUpDraft,
+  type ActionRow, type ChannelRow, type ChannelView, type SalesVariance, type Status, type Tile, type VarianceKey, type WeekMetrics,
 } from "@/lib/hq-scorecard";
 import { ChartCard, Empty, TipBox, TrendChart, useTip } from "./charts";
 import { Modal } from "./modal";
@@ -290,36 +290,23 @@ const WEEK_FIELDS: { name: string; label: string; required?: boolean; kind?: "da
   { name: "Add-on Orders", label: "Orders with an add-on" },
   { name: "Refund Amount", label: "Refunds ($)" },
   { name: "Void Amount", label: "Voids ($)" },
-  { name: CHANNEL_COLUMNS.direct, label: "Direct store sales ($)", hint: "Sold in the store itself." },
-  { name: CHANNEL_COLUMNS.corporate, label: "Corporate sales ($)", hint: "Sold to corporate accounts." },
-  { name: CHANNEL_COLUMNS.online, label: "Online sales ($)", hint: "Sold online." },
+  { name: CHANNEL_COLUMNS.combined, label: "Corporate / online sales ($)", hint: "From the channel sales report." },
+  { name: CHANNEL_COLUMNS.direct, label: "Direct store sales ($)", hint: "Leave blank: it is worked out as net sales minus corporate / online sales. Type it only if your report gives it." },
   { name: "Eligible Orders", label: "Eligible orders (optional)" },
   { name: "Completed Orders", label: "Completed orders (optional)" },
   { name: "Notes", label: "Notes for this week", kind: "text" },
 ];
 
-// A week entered the older way has one "Corporate / Online" figure. It stays editable, right after the channel boxes, but only for such weeks.
-const LEGACY_FIELD = { name: CHANNEL_COLUMNS.combined, label: "Corporate + online together ($, older entry)", hint: "This week was entered as one figure. Type corporate and online above to split it; the boxes above then replace this one." };
-
-function weekFields(initial?: WeekMetrics): typeof WEEK_FIELDS {
-  if (!initial || !(initial.row[CHANNEL_COLUMNS.combined] || "").trim()) return WEEK_FIELDS;
-  const at = WEEK_FIELDS.findIndex(f => f.name === CHANNEL_COLUMNS.online);
-  return [...WEEK_FIELDS.slice(0, at + 1), LEGACY_FIELD, ...WEEK_FIELDS.slice(at + 1)];
-}
-
-/** What the typed channel figures mean, worked out as you type: the missing channel, each share of net sales, and the change from last week. */
+/** The two channels worked out as you type, as the report does: direct store sales, each channel's share of net sales, and the change from last week. */
 function ChannelReadout({ values, prev }: { values: Record<string, string>; prev: WeekMetrics | null }) {
   const net = parseNum(values["Net Sales"]);
   const ch = channelSplit(values, net);
-  const p = (v: number | null) => formatValue("pct1", v);
-  const anyTyped = [CHANNEL_COLUMNS.direct, CHANNEL_COLUMNS.corporate, CHANNEL_COLUMNS.online].some(k => parseNum(values[k]) !== null);
-  if (!anyTyped && ch.corpOnline === null) {
-    return <p className="sub full channel-live">Type direct store, corporate and online sales. Type any two and the third is worked out for you, with each channel’s share of net sales.</p>;
+  if (ch.direct === null && ch.corpOnline === null) {
+    return <p className="sub full channel-live">Type the corporate / online sales and the direct store sales are worked out for you, with each channel’s share of net sales.</p>;
   }
   const rows = [
-    { key: "direct" as const, label: "Direct store", before: prev?.directPct ?? null },
-    { key: "corporate" as const, label: "Corporate", before: prev?.corporatePct ?? null },
-    { key: "online" as const, label: "Online", before: prev?.onlineOnlyPct ?? null },
+    { key: "direct" as const, label: "Direct store sales", before: prev?.directPct ?? null, name: "Direct sales" },
+    { key: "corpOnline" as const, label: "Corporate / online sales", before: prev?.onlinePct ?? null, name: "Online sales" },
   ];
   return (
     <div className="full channel-live" role="status" aria-live="polite">
@@ -331,13 +318,12 @@ function ChannelReadout({ values, prev }: { values: Record<string, string>; prev
           const pts = share !== null && r.before !== null ? (share - r.before) * 100 : null;
           return (
             <li key={r.key}>
-              {r.label}: {dollars === null ? "—" : `${formatValue("money0", dollars)} · ${p(share)}`}
+              {r.label}: {dollars === null ? "—" : `${formatValue("money0", dollars)} · ${formatValue("pct1", share)} ${r.name.toLowerCase()}`}
               {ch.derived[r.key] ? " (worked out)" : ""}
               {pts !== null ? ` · ${pts >= 0 ? "+" : "−"}${Math.abs(pts).toFixed(1)} pts vs last week` : ""}
             </li>
           );
         })}
-        {!ch.split && ch.corpOnline !== null && <li>Corporate + online together: {formatValue("money0", ch.corpOnline)} · {p(net ? ch.corpOnline / net : null)}</li>}
       </ul>
     </div>
   );
@@ -355,8 +341,7 @@ function WeekForm({ initial, weeks, now, onAdd, onUpdate, onClose }: {
   onClose: () => void;
 }) {
   const others = useMemo(() => weeks.filter(w => w.id !== initial?.id), [weeks, initial]); // a week can't be entered twice
-  const fields = useMemo(() => weekFields(initial), [initial]);
-  const lastChannelField = fields.some(f => f.name === CHANNEL_COLUMNS.combined) ? CHANNEL_COLUMNS.combined : CHANNEL_COLUMNS.online; // the live readout goes right after the channel boxes
+  const fields = WEEK_FIELDS;
   const base = useMemo(() => {
     const v: Record<string, string> = {};
     if (initial) {
@@ -443,7 +428,7 @@ function WeekForm({ initial, weeks, now, onAdd, onUpdate, onClose }: {
               {f.hint && <small className="sub">{f.hint}{f.kind === "date" && !initial && prev ? ` Suggested: the week after ${dateLabelYear(prev.weekEnding)}.` : ""}</small>}
               {last && <small className="sub">Week before: {last}</small>}
             </label>
-            {f.name === lastChannelField && <ChannelReadout values={values} prev={prev} />}
+            {f.name === CHANNEL_COLUMNS.direct && <ChannelReadout values={values} prev={prev} />}
           </Fragment>
         );
       })}
@@ -675,7 +660,7 @@ function AttentionItem({ label, text, linked, onAction }: { label: string; text:
   );
 }
 
-// ── Sales by channel: direct store vs corporate vs online, and how each moved ─────────────────────────────
+// ── Sales by channel (direct store vs corporate / online) and net sales variance, as in the weekly report ─────────────
 
 const pctText = (v: number | null) => formatValue("pct1", v);
 const signedMoney = (v: number) => `${v >= 0 ? "+" : "−"}${formatValue("money0", Math.abs(v))}`;
@@ -683,9 +668,8 @@ const signedPts = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v).toFixed(1
 const signedPct = (v: number) => `${v >= 0 ? "+" : "−"}${Math.abs(v * 100).toFixed(1)}%`;
 
 function ChannelLine({ row }: { row: ChannelRow }) {
-  const subtotal = row.key === "corpOnline";
   return (
-    <tr className={subtotal ? "chan-sub" : undefined}>
+    <tr>
       <th scope="row">{row.label}{row.derived && <small className="sub"> (worked out)</small>}</th>
       <td>{row.dollars === null ? "—" : formatValue("money0", row.dollars)}</td>
       <td>{pctText(row.pct)}</td>
@@ -709,7 +693,7 @@ function ChannelPanel({ week, previous, view, recent }: { week: WeekMetrics; pre
         <button type="button" className="btn" onClick={() => openEditWeek(week)}>Edit channel sales</button>
       </div>
       {nothing ? (
-        <p className="sub" style={{ margin: 0 }}>No channel sales were entered for this week. Press <b>Edit channel sales</b> and type direct store, corporate and online sales (any two is enough: the third and every percentage are worked out for you).</p>
+        <p className="sub" style={{ margin: 0 }}>No channel sales were entered for this week. Press <b>Edit channel sales</b> and type the corporate / online sales: the direct store sales and every percentage are worked out for you.</p>
       ) : (
         <>
           <div style={{ overflowX: "auto" }}>
@@ -733,7 +717,6 @@ function ChannelPanel({ week, previous, view, recent }: { week: WeekMetrics; pre
             </table>
           </div>
           {view.gap && <p className="sub" style={{ margin: "8px 0 0" }}>{view.gap}</p>}
-          {!view.split && <p className="sub" style={{ margin: "6px 0 0" }}>Corporate and online were entered as one figure for this week. Press <b>Edit channel sales</b> and type them separately to split them.</p>}
           {view.weeksBack > 1 && <p className="sub score-stale" style={{ margin: "6px 0 0" }}>Changes are measured against the week ending {view.previous ? dateLabelYear(view.previous) : ""}, {view.weeksBack} weeks earlier: a week in between was not entered.</p>}
         </>
       )}
@@ -742,13 +725,14 @@ function ChannelPanel({ week, previous, view, recent }: { week: WeekMetrics; pre
           <summary>Recent weeks</summary>
           <div style={{ overflowX: "auto" }}>
             <table className="channel-table">
-              <thead><tr><th scope="col">Week ending</th><th scope="col">Net sales</th><th scope="col">Direct</th><th scope="col">Corporate</th><th scope="col">Online</th><th scope="col">Corporate + online</th></tr></thead>
+              <thead><tr><th scope="col">Week ending</th><th scope="col">Net sales</th><th scope="col">Direct store</th><th scope="col">Direct sales %</th><th scope="col">Corporate / online</th><th scope="col">Online sales %</th></tr></thead>
               <tbody>
                 {[...recent].reverse().map(w => (
                   <tr key={w.id} className={w.id === week.id ? "is-selected" : undefined}>
                     <th scope="row">{dateLabel(w.weekEnding)}</th>
                     <td>{w.netSales === null ? "—" : formatValue("money0", w.netSales)}</td>
-                    <td>{pctText(w.directPct)}</td><td>{pctText(w.corporatePct)}</td><td>{pctText(w.onlineOnlyPct)}</td><td>{pctText(w.onlinePct)}</td>
+                    <td>{w.channels.direct === null ? "—" : formatValue("money0", w.channels.direct)}</td><td>{pctText(w.directPct)}</td>
+                    <td>{w.channels.corpOnline === null ? "—" : formatValue("money0", w.channels.corpOnline)}</td><td>{pctText(w.onlinePct)}</td>
                   </tr>
                 ))}
               </tbody>
@@ -756,7 +740,43 @@ function ChannelPanel({ week, previous, view, recent }: { week: WeekMetrics; pre
           </div>
         </details>
       )}
-      <p className="sub" style={{ margin: "8px 0 0" }}>Percentages are each channel’s sales ÷ net sales, worked out automatically. Type any two channels and the third is calculated. Direct store’s target share comes from the “Direct Sales %” row in Targets &amp; definitions.</p>
+      <p className="sub" style={{ margin: "8px 0 0" }}>Direct store sales are net sales minus corporate / online sales, and the percentages are each channel’s sales ÷ net sales: all worked out automatically, as in the weekly report. The target shares come from the “Direct Sales %” and “Online Sales Mix” rows in Targets &amp; definitions.</p>
+    </section>
+  );
+}
+
+const varClass = (v: number | null) => (v === null ? "" : v >= 0 ? "chan-good" : "chan-bad");
+
+/** The report's variance columns: this week's net sales against its target, last week and the same week last year, plus the 4-week average. */
+function VariancePanel({ week, variance }: { week: WeekMetrics; variance: SalesVariance }) {
+  const { openEditWeek } = useWorkspace();
+  const missing = (key: VarianceKey) => (key === "target" ? "Enter a sales target for this week to see this." : key === "lastYear" ? "Enter the same week last year to see this." : "");
+  return (
+    <section className="card variance-panel" style={{ marginBottom: 12 }} aria-label="Net sales variance">
+      <div className="list-toolbar">
+        <h2 className="section-title" style={{ margin: 0 }}>Net sales variance · week ending {dateLabelYear(week.weekEnding)}</h2>
+        <button type="button" className="btn" onClick={() => openEditWeek(week)}>Edit</button>
+      </div>
+      <div style={{ overflowX: "auto" }}>
+        <table className="channel-table">
+          <thead><tr><th scope="col">Compared with</th><th scope="col">That was</th><th scope="col">Difference $</th><th scope="col">Difference %</th></tr></thead>
+          <tbody>
+            {variance.rows.map(r => (
+              <tr key={r.key}>
+                <th scope="row">{r.key === "lastWeek" && variance.previous ? `Last week (week ending ${dateLabel(variance.previous)})` : r.label}</th>
+                <td>{r.basis === null ? "—" : formatValue("money0", r.basis)}</td>
+                <td className={varClass(r.dollars)}>{r.dollars === null ? "—" : signedMoney(r.dollars)}</td>
+                <td className={varClass(r.pct)}>{r.pct === null ? <small className="sub">{missing(r.key) || "—"}</small> : signedPct(r.pct)}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <p className="sub" style={{ margin: "8px 0 0" }}>
+        This week’s net sales: <b>{week.netSales === null ? "—" : formatValue("money0", week.netSales)}</b>.{" "}
+        4-week average sales (this week and the three before it): <b>{variance.fourWeekAvg === null ? "—" : formatValue("money0", variance.fourWeekAvg)}</b>.
+      </p>
+      {variance.weeksBack > 1 && <p className="sub score-stale" style={{ margin: "6px 0 0" }}>“Last week” is the week ending {variance.previous ? dateLabelYear(variance.previous) : ""}, {variance.weeksBack} weeks earlier: a week in between was not entered.</p>}
     </section>
   );
 }
@@ -777,6 +797,7 @@ export function EdibleScorecard({ ksiReview, renderAction }: {
   const tiles = useMemo(() => (week ? scorecard(week, previous, targets) : []), [week, previous, targets]);
   const flagged = useMemo(() => attention(tiles), [tiles]);
   const channels = useMemo(() => (week ? channelView(week, previous, targets) : null), [week, previous, targets]);
+  const variance = useMemo(() => (week ? salesVariance(week, previous) : null), [week, previous]);
 
   const view = (w: WeekMetrics) => {
     setViewTime(w.weekEnding.getTime());
@@ -833,6 +854,7 @@ export function EdibleScorecard({ ksiReview, renderAction }: {
       </div>
       {explained && <ExplainPanel tile={explained} onClose={() => setExplainKey(null)} />}
 
+      {variance && <VariancePanel week={week} variance={variance} />}
       {channels && <ChannelPanel week={week} previous={previous} view={channels} recent={weeks.slice(Math.max(0, idx - 7), idx + 1)} />}
 
       <div className="viz-grid">
@@ -917,11 +939,11 @@ export function StoreHealth({ onOpenKpis }: { onOpenKpis: () => void }) {
   const previous = weeks.length > 1 ? weeks[weeks.length - 2] : null;
   const tiles = useMemo(() => (latest ? scorecard(latest, previous, targets) : []), [latest, previous, targets]);
   const flagged = useMemo(() => attention(tiles), [tiles]);
-  // Direct store / corporate / online shares (corporate and online together until they are entered separately).
+  // Direct store and corporate / online shares of net sales, and their change from last week.
   const channelRows = useMemo(() => {
     if (!latest) return [];
     const v = channelView(latest, previous, targets);
-    return v.rows.filter(r => r.pct !== null && (r.key !== "corpOnline" || !v.split));
+    return v.rows.filter(r => r.pct !== null);
   }, [latest, previous, targets]);
 
   if (!latest) {
@@ -970,7 +992,7 @@ export function StoreHealth({ onOpenKpis }: { onOpenKpis: () => void }) {
           <b>Sales by channel:</b>{" "}
           {channelRows.map(r => (
             <span className="channel-chip" key={r.key}>
-              {r.label.replace(" (not split yet)", "").replace(" together", "")} <b>{pctText(r.pct)}</b>
+              {r.label} <b>{pctText(r.pct)}</b>
               {r.pctChangePts !== null && <small className="sub"> ({signedPts(r.pctChangePts)})</small>}
             </span>
           ))}
