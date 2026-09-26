@@ -53,10 +53,12 @@ Set the same variables in the project's Environment Variables, including `GOOGLE
 | `lib/hq-data.ts` | All Google Sheets reads and writes, caching |
 | `lib/hq-progress.ts` | The maths behind the progress charts |
 | `lib/hq-scorecard.ts` | The store scorecard maths: average ticket, labor %, status colours and so on, computed from the raw weekly numbers |
-| `lib/hq-schemas.ts` | Columns of the tabs the app itself owns (`HQ_EDIBLE_*`) |
+| `lib/hq-schemas.ts` | Columns of the tabs the app itself owns (`HQ_EDIBLE_*`, `HQ_FINANCE_ITEMS`, `HQ_FINANCE_PAYMENTS`) |
 | `app/gardenia.tsx` | Gardenia's Fire sales pipeline: account card, add / edit, "Log a touch", follow-ups, board, summary, KPI numbers and the guided Weekly Closing |
 | `lib/hq-pipeline.ts` | The pipeline rules: stages, finding columns by name, reading follow-up dates, follow-up groups, the client's headline numbers, weekly movement |
-| `app/modal.tsx` | The dialog shared by the Edible and Gardenia's Fire screens |
+| `app/finance.tsx` | Finance & Office bills and payments: the intake pop-up, an item's card, "Record a payment", the Bills & Payments tab, the Summary panel, the "Payments to make" list and the guided Weekly Closing |
+| `lib/hq-finance.ts` | The bills rules: the kinds of item, working out how much of a bill is paid, overdue and due-soon, the checks while entering, the weekly numbers and draft |
+| `app/modal.tsx` | The dialog shared by the Edible, Gardenia's Fire and Finance & Office screens |
 
 ## Edible store scorecard
 
@@ -92,6 +94,22 @@ The Gardenia's Fire page has five tabs: Summary, Tasks, Sales Pipeline, Weekly C
 - **History:** stage moves, touches and new accounts are written to `HQ_ACTIVITY` (`Stage Moved`, `Touch Logged`, `Account Added`, Source Type `HQ_GARDENIA_PIPELINE`). Weekly Closing and the "reached someone" count are read from it; Home's Recent Activity shows moves and new accounts.
 - **Connected to the rest of the page:** Summary shows the client's own numbers (Prospects Identified, Contacts Made, Tastings, Standing Accounts; Weekly Revenue says "Not reported" until orders are connected), this month's test and what is due; KPIs adds the stage funnel; **＋ Task** on an account makes a Gardenia task whose Notes cell starts `Account: <name>` (that tag is how the account finds its tasks); Weekly Closing drafts wins, misses, blockers and next steps from the week's movement and saves the wrap-up under that ISO week.
 - **This month's test** is kept as a `HQ_NOTES` row with Source Type `MONTH TEST`; the newest one is shown and anyone can update it from the Summary.
+
+## Finance & Office bills and payments
+
+The Finance & Office page has seven tabs: Summary, Tasks, **Bills & Payments**, Finance Register, Budgets, Weekly Closing and KPIs. It replaces the separate office workbook: each bill, statement or notice is entered once, and the page follows it until it is dealt with. Two tabs hold the data (both are created with their header row; the first column of each is the row's key, so it must stay unique):
+
+| Tab | What it holds |
+|---|---|
+| `HQ_FINANCE_ITEMS` | One row per item that arrives: ID, Received, Type, Entity, Account / Vendor, Last 4, Reference, Description, Amount Due, Due Date, Owner, Status, Source / Email, Notes, Logged By |
+| `HQ_FINANCE_PAYMENTS` | One row per payment made against an item: ID, Item ID, Paid On, Amount, Method, Reference, Paid By, Notes |
+
+- **Intake (＋ Add item)** starts with what arrived (credit card, debit card, bank account, vendor bill, loan / credit line, tax / compliance, payroll, insurance, other). Each kind asks for its own wording (a vendor bill asks for a vendor and invoice number; a card asks for the last four digits, never the full number) and starts with a sensible answer to "Is money owed?". A "What will be saved" preview lists the cells that will be written, updating as you type. It warns about a repeat of something already entered and a due date that has already passed; warnings never block ("Save anyway").
+- **Money owed is flagged.** An item with an amount owed is a bill: it shows under **Payments to make** on the Tasks tab and in the Summary's "Next to pay", most urgent first (overdue, today, this week, later, no date), with a progress bar. An item with nothing owed is a to-do ("To file / follow up") with **Mark done**.
+- **Payments are added, not overwritten.** **Record a payment** adds one row to `HQ_FINANCE_PAYMENTS`; the bar is worked out from the total of an item's payments, so a bill paid in parts shows how much is paid and left until it is fully paid. The bar is red when the bill is overdue, blue when part paid and green when paid off. Paying more than is owed only warns, and the bill shows how much it is over. **Remove** on a payment takes it out, and the bar goes back down.
+- **Status** is only ever set by hand to On hold (or Disputed), Done (for to-dos) or Cancelled; Open / paid / part paid is always worked out. Cancelled items stay listed and stop counting as owed. Deleting an item deletes its payments too.
+- **Weekly Closing** shows the week's payments and what is still open, drafts the four wrap-up boxes from them, and saves the wrap-up with the week's finance numbers. Payments and new bills are written to `HQ_ACTIVITY` (`Payment Recorded`, `Bill Added`), which Home's Recent Activity shows.
+- **Ahmad's personal items are kept off this page.** Register rows and work items that say "personal" are not shown. The older `HQ_FINANCE_REGISTER` tab is still there under Finance Register, and nothing was imported from it because its balances were out of date.
 
 ## Checks
 

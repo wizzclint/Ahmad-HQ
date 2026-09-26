@@ -281,3 +281,34 @@ a.btn,a.link-button{display:inline-block;text-decoration:none}
 a.btn{color:inherit}
 a.btn:hover{background:var(--sage)}
 @media(max-width:800px){.kpis.kpis-5.pipe-kpis{grid-template-columns:1fr 1fr}.pipe-kpis>:last-child{grid-column:1/-1}}
+/* Finance & Office: bills, payments and their progress */
+.type-chip{background:var(--blue);border-radius:99px;color:#275f9b;display:inline-block;font-size:11px;font-weight:700;padding:2px 9px;white-space:nowrap}
+.fin-last4{color:var(--muted);font-size:12px}
+.chip-count{background:rgba(23,59,91,.1);border-radius:99px;font-size:11px;margin-left:4px;padding:1px 7px}
+.chip.selected .chip-count{background:rgba(255,255,255,.25)}
+.due-chip.paid{background:var(--sage);color:var(--good)}
+.due-chip.muted{background:#eef1f0;color:var(--muted)}
+.fin-progress{margin-top:6px;max-width:520px}
+.fin-progress .progress{margin:0 0 3px}
+.fin-progress small{color:var(--muted);font-size:12px}
+.fin-progress.partial .progress>span{background:#275f9b}
+.fin-progress.late .progress>span{background:var(--bad)}
+.fin-progress.paid .progress>span{background:var(--good)}
+.fin-types{display:grid;gap:8px;grid-template-columns:repeat(3,minmax(0,1fr))}
+.fin-type{background:#fff;border:1px solid var(--line);border-radius:10px;cursor:pointer;display:grid;gap:3px;padding:9px 11px;text-align:left}
+.fin-type b{color:var(--navy);font-size:13px}
+.fin-type small{color:var(--muted);font-size:11px;line-height:1.35}
+.fin-type:hover{background:var(--sage)}
+.fin-type.selected{background:var(--navy);border-color:var(--navy)}
+.fin-type.selected b,.fin-type.selected small{color:#fff}
+.form-grid label.fin-check{align-items:center;color:var(--ink);display:flex;font-weight:700;gap:8px}
+.form-grid label.fin-check input{height:18px;width:18px}
+.fin-preview{background:#f6f8fa;border:1px solid var(--line);border-radius:10px;padding:9px 12px}
+.fin-preview h3{color:#234e69;font-size:13px;margin:0 0 4px}
+.fin-preview .acct-row{grid-template-columns:minmax(120px,170px) minmax(0,1fr);padding:3px 0}
+.fin-next{border-top:1px solid #edf1ef;padding:6px 0 8px}
+.fin-next:first-of-type{border-top:0}
+.fin-next .fin-progress{margin-top:2px}
+.fin-next-right{align-items:center;display:flex;flex-wrap:wrap;gap:8px;justify-content:flex-end}
+@media(max-width:800px){.fin-types{grid-template-columns:1fr 1fr}}
+@media(max-width:520px){.fin-types{grid-template-columns:1fr}}

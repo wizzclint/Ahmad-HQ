@@ -15,6 +15,16 @@ export const APP_SHEETS: Record<string, string[]> = {
     // when the channel report gives it (the other one is then worked out).
     "Direct Store Sales",
   ],
+  // Finance & Office "Bills & payments": one row per item that arrives (a card statement, a vendor bill, a notice...).
+  // The ID is the row's identity. Money owed is "Amount Due"; what has been paid is worked out from HQ_FINANCE_PAYMENTS.
+  HQ_FINANCE_ITEMS: [
+    "ID", "Received", "Type", "Entity", "Account / Vendor", "Last 4", "Reference", "Description",
+    "Amount Due", "Due Date", "Owner", "Status", "Source / Email", "Notes", "Logged By",
+  ],
+  // One row per payment made against an item, so a bill paid in parts shows its progress.
+  HQ_FINANCE_PAYMENTS: [
+    "ID", "Item ID", "Paid On", "Amount", "Method", "Reference", "Paid By", "Notes",
+  ],
   // Mirrors "Setup & Targets": what each KPI means, its target and its colour thresholds.
   HQ_EDIBLE_TARGETS: [
     "KPI", "Frequency", "Definition", "Calculation", "Primary Source", "Target",

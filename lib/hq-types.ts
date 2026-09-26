@@ -37,6 +37,9 @@ export type HqBootstrap = {
   edibleWeekly: SheetRow[];
   edibleTargets: SheetRow[];
   edibleKsiReview: SheetRow[];
+  // Finance & Office bills and their payments (see lib/hq-finance.ts)
+  financeItems: SheetRow[];
+  financePayments: SheetRow[];
   // Sheets created at runtime via "+ New Register" — not known at compile
   // time, so their data lives in a lookup keyed by sheet name instead of a
   // fixed field here.

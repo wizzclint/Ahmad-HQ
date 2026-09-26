@@ -434,6 +434,7 @@ const STANDARD_SHEETS: [keyof HqBootstrap, string][] = [
   ["notes", "HQ_NOTES"], ["activity", "HQ_ACTIVITY"],
   ["firefliesLegacy", "HQ_FIREFLIES_LEGACY"], ["ironTasks", "HQ_IRONMARK_TASKS"],
   ["edibleWeekly", "HQ_EDIBLE_WEEKLY"], ["edibleTargets", "HQ_EDIBLE_TARGETS"], ["edibleKsiReview", "HQ_EDIBLE_KSI_REVIEW"],
+  ["financeItems", "HQ_FINANCE_ITEMS"], ["financePayments", "HQ_FINANCE_PAYMENTS"],
 ];
 
 /** Reads the whole workspace from Google Sheets in a couple of requests (see readMany). */
@@ -507,6 +508,7 @@ export async function getBootstrap(user: HqUser | null): Promise<HqBootstrap> {
       systemAccess: EMPTY, periods: EMPTY, notes: EMPTY, activity: EMPTY,
       firefliesLegacy: EMPTY, ironTasks: EMPTY, customSheetDefs: [], customSheets: {},
       edibleWeekly: EMPTY, edibleTargets: EMPTY, edibleKsiReview: EMPTY,
+      financeItems: EMPTY, financePayments: EMPTY,
     };
   }
 

@@ -8,6 +8,8 @@ import { ProgressPanel } from "./charts";
 import { AppShell, type NavSection } from "./shell";
 import { CloseTheWeek, EdibleScorecard, EdibleWorkspace, StoreHealth, type NewAction } from "./edible";
 import { CloseSalesWeek, PipelineHealth, PipelineKpis, PipelineTab, PipelineWorkspace, type NewAccountTask, type PipelineActions } from "./gardenia";
+import { CloseFinanceWeek, FinanceHealth, FinanceKpis, FinanceWorkspace, PayablesTab, PaymentsDue, type FinanceActions } from "./finance";
+import { ITEMS_SHEET, PAYMENTS_SHEET, isPersonal } from "@/lib/hq-finance";
 import { PIPELINE_SHEET, accountTag, monthTestRow, taskTitle } from "@/lib/hq-pipeline";
 import { APP_SHEETS } from "@/lib/hq-schemas";
 
@@ -27,6 +29,7 @@ const emptyData: HqBootstrap = {
   requests: [], training: [], systemAccess: [], periods: [], notes: [], activity: [],
   firefliesLegacy: [], ironTasks: [], customSheetDefs: [], customSheets: {},
   edibleWeekly: [], edibleTargets: [], edibleKsiReview: [],
+  financeItems: [], financePayments: [],
 };
 
 // ── Feedback layer ───────────────────────────────────────────────────────
@@ -124,9 +127,11 @@ const closed = (v = "") => /done|complete|closed/i.test(v);
 
 // The dedicated task sheets don't assign their own ids, so a new row gets one from the clock.
 const newTaskId = (prefix: string) => `${prefix}-${Date.now().toString(36).toUpperCase()}`;
+// Finance items and payments are found again by their id, so two entered in the same moment must not share one.
+const newFinId = (prefix: "F" | "P") => `${prefix}-${Date.now().toString(36).toUpperCase()}${Math.random().toString(36).slice(2, 4).toUpperCase()}`;
 
 // How Home's Recent Activity names each kind of history entry it shows.
-const ACTIVITY_LABEL: Record<string, string> = { "Task Completed": "Completed", "Stage Moved": "Moved", "Account Added": "Added" };
+const ACTIVITY_LABEL: Record<string, string> = { "Task Completed": "Completed", "Stage Moved": "Moved", "Account Added": "Added", "Payment Recorded": "Paid", "Bill Added": "Bill added" };
 
 // ── Kanban pipelines ─────────────────────────────────────────────────────
 // A pipeline is an ordered list of stages — that order is both the column
@@ -229,11 +234,11 @@ const AREA_PAGES: Record<string, AreaPage> = {
     ],
   },
   finance: {
-    title: "Finance & Office", subtitle: "Finance register, budgets and the weekly close",
+    title: "Finance & Office", subtitle: "Bills and payments, the finance register, budgets and the weekly close",
     label: "Finance & Office", business: /finance/i, captureKey: "finance",
     tabs: [
-      { id: "summary", label: "Summary" }, { id: "tasks", label: "▤ Tasks" }, { id: "register", label: "Finance Register" },
-      { id: "budgets", label: "Budgets" }, { id: "closing", label: "Weekly Closing" }, { id: "kpi", label: "KPIs" },
+      { id: "summary", label: "Summary" }, { id: "tasks", label: "▤ Tasks" }, { id: "payables", label: "$ Bills & Payments" },
+      { id: "register", label: "Finance Register" }, { id: "budgets", label: "Budgets" }, { id: "closing", label: "Weekly Closing" }, { id: "kpi", label: "KPIs" },
     ],
   },
   iron: {
@@ -883,7 +888,7 @@ function Home({ data, onSave, onDelete }: { data: HqBootstrap; onSave: (u: Sheet
       <Section title="Recent Activity">
         {(() => {
           const recent = [...data.activity]
-            .filter(r => ["Task Assigned", "Task Completed", "Stage Moved", "Account Added"].includes(r["Action Type"]))
+            .filter(r => ["Task Assigned", "Task Completed", "Stage Moved", "Account Added", "Payment Recorded", "Bill Added"].includes(r["Action Type"]))
             .sort((a, b) => new Date(b.Timestamp || 0).getTime() - new Date(a.Timestamp || 0).getTime())
             .slice(0, 8);
           if (!recent.length) return <p className="sub">No activity recorded yet — assigned and completed tasks, and sales accounts that move or are added, will show up here.</p>;
@@ -965,7 +970,9 @@ export default function HomePage() {
   const areaRows = useMemo(() => {
     const selected = areas.find(a => a.id === view);
     if (!selected) return data.work;
-    return data.work.filter(r => selected.match.some(m => String(r["Project / Function"] || "").toLowerCase().includes(m)));
+    const inArea = data.work.filter(r => selected.match.some(m => String(r["Project / Function"] || "").toLowerCase().includes(m)));
+    // "Ahmad Personal Finance / Life" contains "finance": Ahmad's personal items stay off the Finance & Office page.
+    return selected.id === "finance" ? inArea.filter(r => !isPersonal(r["Project / Function"])) : inArea;
   }, [data.work, view]);
 
   const visibleWork = areaRows;
@@ -1072,7 +1079,7 @@ export default function HomePage() {
   }
 
   // Generic delete for any HQ_* sheet
-  async function deleteAnyRow(sheet: string, id: string, message = "Deleted") {
+  async function deleteAnyRow(sheet: string, id: string, message: string | null = "Deleted") {
     const res = await tracked(() => call("/api/hq", {
       method: "DELETE",
       headers: { "Content-Type": "application/json" },
@@ -1083,7 +1090,7 @@ export default function HomePage() {
       throw new Error("Delete failed");
     }
     updateSheetRows(sheet, rows => rows.filter(r => r[Object.keys(r)[0]] !== id));
-    notify(message);
+    if (message) notify(message);
   }
 
   async function deleteWorkItem(id: string) {
@@ -1255,6 +1262,20 @@ export default function HomePage() {
     saveMonthTest: text => addAnyRow("HQ_NOTES", monthTestRow(text, session?.user?.name || "Ahmad", new Date()), "This month’s test saved"),
   };
 
+  // What the Finance & Office bills screens can do: each one saves through the same generic API as the rest of the app.
+  const financeActions: FinanceActions = {
+    addItem: row => addAnyRow(ITEMS_SHEET, row, "Item added"),
+    updateItem: (key, changes, message) => updateAnyRow(ITEMS_SHEET, key, changes, message),
+    deleteItem: async key => {
+      for (const p of data.financePayments.filter(x => x["Item ID"] === key)) await deleteAnyRow(PAYMENTS_SHEET, p.ID, null);
+      await deleteAnyRow(ITEMS_SHEET, key, "Item deleted");
+    },
+    addPayment: row => addAnyRow(PAYMENTS_SHEET, row, "Payment recorded"),
+    deletePayment: key => deleteAnyRow(PAYMENTS_SHEET, key, "Payment removed"),
+    logActivity: row => { addAnyRow("HQ_ACTIVITY", row, null).catch(() => { /* best-effort: the change itself already saved */ }); },
+    newId: newFinId,
+  };
+
   const nav = (v: View) => {
     if (v === "add") setCaptureArea("");
     setView(v);
@@ -1346,6 +1367,9 @@ export default function HomePage() {
     return { total: tasks.length, done, open, inProgress, blocked, overdue, pct: tasks.length ? Math.round((done.length / tasks.length) * 100) : 0 };
   }
 
+  // The finance register without Ahmad's personal rows (they are kept off this page).
+  const businessRegister = () => data.financeReg.filter(r => !isPersonal(...Object.values(r)));
+
   // Business-specific headline numbers, shared by the Summary and KPIs tabs.
   function areaSpotlight(viewId: string, cfg: AreaPage): { label: string; value: string | number; detail: string; tone: string }[] {
     if (viewId === "store") {
@@ -1362,9 +1386,10 @@ export default function HomePage() {
       ];
     }
     if (viewId === "finance") {
-      const open = data.financeReg.filter(r => !/closed|complete|paid|done|resolved/i.test(r.Status || ""));
+      const register = businessRegister();
+      const open = register.filter(r => !/closed|complete|paid|done|resolved/i.test(r.Status || ""));
       return [
-        { label: "Register items", value: data.financeReg.length, detail: `${open.length} still open`, tone: "lav" },
+        { label: "Register items", value: register.length, detail: `${open.length} still open`, tone: "lav" },
         { label: "Budget lines", value: data.budgets.length, detail: "Across all businesses", tone: "blue" },
       ];
     }
@@ -1379,6 +1404,7 @@ export default function HomePage() {
       <>
         {viewId === "store" && <StoreHealth onOpenKpis={() => setAreaTab(cur => ({ ...cur, store: "kpi" }))} />}
         {viewId === "gardenia" && <PipelineHealth onOpenPipeline={() => setAreaTab(cur => ({ ...cur, gardenia: "pipeline" }))} />}
+        {viewId === "finance" && <FinanceHealth onOpenPayables={() => setAreaTab(cur => ({ ...cur, finance: "payables" }))} />}
         <section className="kpis">
           <Kpi label="Open tasks" value={s.open.length} detail={`${s.total} total`} tone="sage" />
           <Kpi label="In progress" value={s.inProgress.length} detail="Being worked on now" tone="blue" />
@@ -1453,6 +1479,7 @@ export default function HomePage() {
         : null;
     return (
       <>
+        {viewId === "finance" && <PaymentsDue onOpenPayables={() => setAreaTab(cur => ({ ...cur, finance: "payables" }))} />}
         <div className="list-toolbar" style={{ marginBottom: 12 }}>
           <span className="sub">Drag cards between columns to update their status.</span>
           <button className="btn primary" onClick={() => openCapture(cfg.captureKey)}>＋ Assign a task</button>
@@ -1493,17 +1520,19 @@ export default function HomePage() {
     };
     const isStore = cfg.captureKey === "edible";
     const isGardenia = cfg.captureKey === "gardenia";
+    const isFinance = cfg.captureKey === "finance";
     return (
       <>
         {isStore && <CloseTheWeek wraps={wraps} onSave={saveWrapUp} />}
         {isGardenia && <CloseSalesWeek wraps={wraps} onSave={saveWrapUp} />}
-        {(!isGardenia || runs.length > 0) && (
+        {isFinance && <CloseFinanceWeek wraps={wraps} onSave={saveWrapUp} />}
+        {((!isGardenia && !isFinance) || runs.length > 0) && (
           <Section title="Checklists for this business">
             {areaTable("HQ_CHECKLIST_RUNS", data.checklistRuns, belongs, ["Checklist Name", "Period Key", "Status", "Completion %", "On Time?", "Owner"], { Business: cfg.label })}
             <p className="sub" style={{ marginBottom: 0 }}>{runs.length} run{runs.length === 1 ? "" : "s"} recorded. Use “Run Maintenance” in the sidebar to generate the missing daily/weekly checklists.</p>
           </Section>
         )}
-        {!isStore && !isGardenia && (
+        {!isStore && !isGardenia && !isFinance && (
           <Section title={`Weekly wrap-up · ${wk}`}>
             <WeeklyWrapUpForm weekKey={wk} onSave={saveWrapUp} />
           </Section>
@@ -1552,6 +1581,7 @@ export default function HomePage() {
     return (
       <>
         {isSales && <PipelineKpis />}
+        {viewId === "finance" && <FinanceKpis />}
         <section className="kpis">
           <Kpi label="Task completion" value={`${s.pct}%`} detail={`${s.done.length} of ${s.total} done`} tone="mint" />
           <Kpi label="Open tasks" value={s.open.length} detail="Still to do" tone="sage" />
@@ -1581,7 +1611,13 @@ export default function HomePage() {
       case "pipeline": return <PipelineTab />;
       case "closing": return areaClosingTab(cfg);
       case "kpi": return areaKpiTab(viewId, cfg);
-      case "register": return <Section title="Finance Register">{edt("HQ_FINANCE_REGISTER", data.financeReg, ["Register Type", "Entity / Property", "Account / Policy / Vendor / Tax", "Status", "Amount / Balance", "Due / Next Date", "Owner"])}</Section>;
+      case "payables": return <PayablesTab />;
+      case "register": return (
+        <Section title="Finance Register">
+          <p className="sub" style={{ marginTop: 0 }}>The older register. New bills, statements and notices go in Bills &amp; Payments instead, where payments are tracked. Ahmad’s personal rows are not shown here.</p>
+          {edt("HQ_FINANCE_REGISTER", businessRegister(), ["Register Type", "Entity / Property", "Account / Policy / Vendor / Tax", "Status", "Amount / Balance", "Due / Next Date", "Owner"], colsOf(data.financeReg, []))}
+        </Section>
+      );
       case "budgets": return <Section title="Budgets">{edt("HQ_BUDGETS", data.budgets, ["Year", "Month", "Business", "Revenue Budget", "Net Profit Budget", "Owner"])}</Section>;
       case "checklists": return (
         <>
@@ -1629,6 +1665,23 @@ export default function HomePage() {
         >
           {page}
         </PipelineWorkspace>
+      );
+    }
+    if (viewId === "finance") {
+      // Finance & Office: its tabs share one workspace (the bills, their payments and the intake / payment dialogs).
+      const owners = [...new Set([...data.financeItems.map(r => r.Owner), ...data.work.map(r => r.Owner), ...data.people.map(p => p.Name)].map(s => (s || "").trim()).filter(Boolean))].sort();
+      const entities = [...new Set(businessRegister().map(r => (r["Entity / Property"] || "").trim()).filter(Boolean))];
+      return (
+        <FinanceWorkspace
+          items={data.financeItems}
+          payments={data.financePayments}
+          entities={entities}
+          owners={owners}
+          me={session?.user?.name || ""}
+          actions={financeActions}
+        >
+          {page}
+        </FinanceWorkspace>
       );
     }
     if (viewId !== "store") return page;
@@ -1947,4 +2000,5 @@ const sheetToKey: Record<string, string> = {
   HQ_PERIODS: "periods", HQ_NOTES: "notes", HQ_ACTIVITY: "activity",
   HQ_FIREFLIES_LEGACY: "firefliesLegacy",
   HQ_EDIBLE_WEEKLY: "edibleWeekly", HQ_EDIBLE_TARGETS: "edibleTargets", HQ_EDIBLE_KSI_REVIEW: "edibleKsiReview",
+  HQ_FINANCE_ITEMS: "financeItems", HQ_FINANCE_PAYMENTS: "financePayments",
 };
