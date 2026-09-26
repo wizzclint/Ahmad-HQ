@@ -189,6 +189,68 @@ export function financeTotals(items: FinItem[], today: Date): FinanceTotals {
   return t;
 }
 
+// ── Cash position: what has to go out, and when ──────────────────────────────
+
+const DAY_MS = 86_400_000;
+/** Monday (UTC midnight) of the calendar week containing `day`. */
+const mondayOf = (day: Date) => new Date(day.getTime() - ((day.getUTCDay() + 6) % 7) * DAY_MS);
+
+export type CashBucketId = "overdue" | "this" | "next" | "after" | "later" | "nodate";
+export type CashBucket = { id: CashBucketId; title: string; range: string; items: FinItem[]; amount: number };
+
+/** Bills with something still to pay, grouped by the calendar week they are due (Monday to Sunday), plus what is overdue and what has no date. */
+export function cashBuckets(items: FinItem[], today: Date): CashBucket[] {
+  const monday = mondayOf(today);
+  const at = (days: number) => new Date(monday.getTime() + days * DAY_MS);
+  const week = (n: number) => `${dayLabel(at(7 * n), false)} – ${dayLabel(at(7 * n + 6), false)}`;
+  const defs: [CashBucketId, string, string][] = [
+    ["overdue", "Overdue", "Past the due date"],
+    ["this", "This week", week(0)],
+    ["next", "Next week", week(1)],
+    ["after", "The week after", week(2)],
+    ["later", "Later", `From ${dayLabel(at(21), false)}`],
+    ["nodate", "No due date", "Add a due date so these can be planned"],
+  ];
+  const bucketOf = (i: FinItem): CashBucketId => {
+    if (!i.due) return "nodate";
+    if (i.due.getTime() < today.getTime()) return "overdue";
+    const w = Math.floor((i.due.getTime() - monday.getTime()) / (7 * DAY_MS));
+    return w <= 0 ? "this" : w === 1 ? "next" : w === 2 ? "after" : "later";
+  };
+  const open = items.filter(needsPaying);
+  return defs.map(([id, title, range]) => {
+    const mine = inUrgencyOrder(open.filter(i => bucketOf(i) === id), today);
+    return { id, title, range, items: mine, amount: cents(mine.reduce((s, i) => s + (i.remaining ?? 0), 0)) };
+  });
+}
+
+/** What was paid out this week (Monday to Sunday) and this calendar month. */
+export function cashPaid(items: FinItem[], today: Date): { week: number; month: number } {
+  const monday = mondayOf(today);
+  const between = (start: Date, end: Date) => cents(items.reduce((sum, i) => sum + i.payments.reduce((s, p) => s + (p.paidOn && p.paidOn >= start && p.paidOn < end ? p.amount : 0), 0), 0));
+  return {
+    week: between(monday, new Date(monday.getTime() + 7 * DAY_MS)),
+    month: between(new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth(), 1)), new Date(Date.UTC(today.getUTCFullYear(), today.getUTCMonth() + 1, 1))),
+  };
+}
+
+export type KindTotal = { type: string; count: number; owed: number; overdue: number };
+
+/** Still to pay, by kind of item (credit card, vendor bill, payroll...), largest first. */
+export function owedByKind(items: FinItem[], today: Date): KindTotal[] {
+  const map = new Map<string, KindTotal>();
+  for (const i of items) {
+    if (!needsPaying(i)) continue;
+    const type = i.type || "Other";
+    const row = map.get(type) ?? { type, count: 0, owed: 0, overdue: 0 };
+    row.count++;
+    row.owed += i.remaining ?? 0;
+    if (isLate(i, today)) row.overdue += i.remaining ?? 0;
+    map.set(type, row);
+  }
+  return [...map.values()].map(r => ({ ...r, owed: cents(r.owed), overdue: cents(r.overdue) })).sort((a, b) => b.owed - a.owed || a.type.localeCompare(b.type));
+}
+
 // ── Checks while entering (never blocking) ───────────────────────────────────
 
 export type ItemValues = {

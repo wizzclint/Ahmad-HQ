@@ -8,7 +8,7 @@ import { ProgressPanel } from "./charts";
 import { AppShell, type NavSection } from "./shell";
 import { CloseTheWeek, EdibleScorecard, EdibleWorkspace, StoreHealth, type NewAction } from "./edible";
 import { CloseSalesWeek, PipelineHealth, PipelineKpis, PipelineTab, PipelineWorkspace, type NewAccountTask, type PipelineActions } from "./gardenia";
-import { CloseFinanceWeek, FinanceHealth, FinanceKpis, FinanceWorkspace, PayablesTab, PaymentsDue, type FinanceActions } from "./finance";
+import { CashPosition, CloseFinanceWeek, FinanceHealth, FinanceWorkspace, PayablesTab, type FinanceActions } from "./finance";
 import { ITEMS_SHEET, PAYMENTS_SHEET, isPersonal } from "@/lib/hq-finance";
 import { PIPELINE_SHEET, accountTag, monthTestRow, taskTitle } from "@/lib/hq-pipeline";
 import { APP_SHEETS } from "@/lib/hq-schemas";
@@ -210,7 +210,7 @@ const TASK_SHEET_AREAS: Record<string, string> = {
 
 // ── Area pages ───────────────────────────────────────────────────────────
 // Edible - Store, Gardenia's Fire, Finance & Office and Iron Marks share one
-// page template (Summary, Tasks, Weekly Closing, KPIs) plus tabs that only
+// page template (Summary, Tasks, Weekly Closing, KPIs; Finance & Office names and orders its own) plus tabs that only
 // make sense for that business. Adding a tab to an area = one entry in its
 // `tabs` list here plus one case in renderAreaTab().
 type AreaTab = { id: string; label: string };
@@ -234,11 +234,11 @@ const AREA_PAGES: Record<string, AreaPage> = {
     ],
   },
   finance: {
-    title: "Finance & Office", subtitle: "Bills and payments, the finance register, budgets and the weekly close",
+    title: "Finance & Office", subtitle: "Business performance, cash, bills, the register, budgets and the week close",
     label: "Finance & Office", business: /finance/i, captureKey: "finance",
     tabs: [
-      { id: "summary", label: "Summary" }, { id: "tasks", label: "▤ Tasks" }, { id: "payables", label: "$ Bills & Payments" },
-      { id: "register", label: "Finance Register" }, { id: "budgets", label: "Budgets" }, { id: "closing", label: "Weekly Closing" }, { id: "kpi", label: "KPIs" },
+      { id: "summary", label: "Business performance" }, { id: "cash", label: "Cash position" }, { id: "payables", label: "Bills and receivables" },
+      { id: "register", label: "Register" }, { id: "budgets", label: "Budgets" }, { id: "closing", label: "Week Close" },
     ],
   },
   iron: {
@@ -774,7 +774,7 @@ const guideSteps: { title: string; body: string }[] = [
   },
   {
     title: "Operating area tabs",
-    body: "Each business area — Edible, Gardenia's Fire, Finance & Office, Property, People & Systems, Personal/Ahmad, Iron Marks — has its own tab. Opening one shows only that area's work items plus the registers specific to it (e.g. Finance & Office shows the Finance Register; Gardenia's Fire shows its Sales Pipeline). Use these when you want to focus on one part of the business instead of everything at once.",
+    body: "Each business area — Edible, Gardenia's Fire, Finance & Office, Property, People & Systems, Personal/Ahmad, Iron Marks — has its own tab. Opening one shows only that area's work items plus the registers specific to it (e.g. Finance & Office shows Cash position, Bills and receivables and the Register; Gardenia's Fire shows its Sales Pipeline). Use these when you want to focus on one part of the business instead of everything at once.",
   },
   {
     title: "Close / Review",
@@ -1442,6 +1442,7 @@ export default function HomePage() {
             <div className="mini-row" key={i}><b>{r.Detail || "—"}</b><small>{r.Timestamp ? new Date(r.Timestamp).toLocaleString() : ""}</small></div>
           )) : <p className="sub">Tasks assigned to {cfg.label} from Capture / Inbox will show up here.</p>}
         </Section>
+        {viewId === "finance" && performanceTables(cfg)}
       </>
     );
   }
@@ -1479,7 +1480,6 @@ export default function HomePage() {
         : null;
     return (
       <>
-        {viewId === "finance" && <PaymentsDue onOpenPayables={() => setAreaTab(cur => ({ ...cur, finance: "payables" }))} />}
         <div className="list-toolbar" style={{ marginBottom: 12 }}>
           <span className="sub">Drag cards between columns to update their status.</span>
           <button className="btn primary" onClick={() => openCapture(cfg.captureKey)}>＋ Assign a task</button>
@@ -1572,32 +1572,39 @@ export default function HomePage() {
     );
   }
 
+  // The area's key status indicators and targets versus actual. Gardenia's Fire shows them only once the client has put rows in them (they are empty today).
+  function performanceTables(cfg: AreaPage, onlyWhenFilled = false) {
+    return (
+      <>
+        {(!onlyWhenFilled || data.ksi.some(r => cfg.business.test(r["Business / Area"] || ""))) && (
+          <Section title="Key Status Indicators">
+            {areaTable("HQ_KSI", data.ksi, r => cfg.business.test(r["Business / Area"] || ""), ["Metric / Indicator", "Current", "Status", "Threshold / Target", "Direction", "Owner", "Next Move"], { "Business / Area": cfg.label })}
+          </Section>
+        )}
+        {(!onlyWhenFilled || data.targets.some(r => cfg.business.test(r.Business || ""))) && (
+          <Section title="Targets vs actual">
+            {areaTable("HQ_TARGETS", data.targets, r => cfg.business.test(r.Business || ""), ["Metric", "Target", "Actual", "Variance", "Variance %", "YoY %", "Owner"], { Business: cfg.label })}
+          </Section>
+        )}
+      </>
+    );
+  }
+
   function areaKpiTab(viewId: string, cfg: AreaPage) {
     if (viewId === "store") return edibleKpiTab();
     const s = taskStats(areaTasks(viewId));
     const spotlight = areaSpotlight(viewId, cfg);
-    // Gardenia's Fire shows the two register tables only once the client has put rows in them (they are empty today).
     const isSales = viewId === "gardenia";
     return (
       <>
         {isSales && <PipelineKpis />}
-        {viewId === "finance" && <FinanceKpis />}
         <section className="kpis">
           <Kpi label="Task completion" value={`${s.pct}%`} detail={`${s.done.length} of ${s.total} done`} tone="mint" />
           <Kpi label="Open tasks" value={s.open.length} detail="Still to do" tone="sage" />
           <Kpi label="Overdue" value={s.overdue.length} detail="Past their due date" tone="peach" />
           {spotlight.map(k => <Kpi key={k.label} {...k} />)}
         </section>
-        {(!isSales || data.ksi.some(r => cfg.business.test(r["Business / Area"] || ""))) && (
-          <Section title="Key Status Indicators">
-            {areaTable("HQ_KSI", data.ksi, r => cfg.business.test(r["Business / Area"] || ""), ["Metric / Indicator", "Current", "Status", "Threshold / Target", "Direction", "Owner", "Next Move"], { "Business / Area": cfg.label })}
-          </Section>
-        )}
-        {(!isSales || data.targets.some(r => cfg.business.test(r.Business || ""))) && (
-          <Section title="Targets vs actual">
-            {areaTable("HQ_TARGETS", data.targets, r => cfg.business.test(r.Business || ""), ["Metric", "Target", "Actual", "Variance", "Variance %", "YoY %", "Owner"], { Business: cfg.label })}
-          </Section>
-        )}
+        {performanceTables(cfg, isSales)}
       </>
     );
   }
@@ -1611,10 +1618,11 @@ export default function HomePage() {
       case "pipeline": return <PipelineTab />;
       case "closing": return areaClosingTab(cfg);
       case "kpi": return areaKpiTab(viewId, cfg);
+      case "cash": return <CashPosition onOpenPayables={() => setAreaTab(cur => ({ ...cur, finance: "payables" }))} />;
       case "payables": return <PayablesTab />;
       case "register": return (
-        <Section title="Finance Register">
-          <p className="sub" style={{ marginTop: 0 }}>The older register. New bills, statements and notices go in Bills &amp; Payments instead, where payments are tracked. Ahmad’s personal rows are not shown here.</p>
+        <Section title="Register">
+          <p className="sub" style={{ marginTop: 0 }}>The older register. New bills, statements and notices go in Bills and receivables instead, where payments are tracked. Ahmad’s personal rows are not shown here.</p>
           {edt("HQ_FINANCE_REGISTER", businessRegister(), ["Register Type", "Entity / Property", "Account / Policy / Vendor / Tax", "Status", "Amount / Balance", "Due / Next Date", "Owner"], colsOf(data.financeReg, []))}
         </Section>
       );

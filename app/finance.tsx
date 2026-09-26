@@ -5,17 +5,17 @@ import type { SheetRow } from "@/lib/hq-types";
 import { APP_SHEETS } from "@/lib/hq-schemas";
 import {
   FILTERS, FIN_TYPES, ITEMS_SHEET, PAYMENT_METHODS,
-  activityRow, dueState, financeTotals, inUrgencyOrder, isOpen, itemError, itemRow, itemWarnings, itemsFrom, matchesFilter, matchesSearch,
-  money, needsPaying, numbersLine, paymentError, paymentRow, paymentWarnings, typeInfo, weekPayments, weekWrapUp,
-  type FinFilter, type FinItem, type FinanceTotals, type ItemValues, type PaymentValues,
+  activityRow, cashBuckets, cashPaid, dueState, financeTotals, inUrgencyOrder, isOpen, itemError, itemRow, itemWarnings, itemsFrom, matchesFilter, matchesSearch,
+  money, needsPaying, numbersLine, owedByKind, paymentError, paymentRow, paymentWarnings, typeInfo, weekPayments, weekWrapUp,
+  type CashBucket, type FinFilter, type FinItem, type FinanceTotals, type ItemValues, type PaymentValues,
 } from "@/lib/hq-finance";
 import { dayLabel, findDate, isoDay, quickDates, todayUTC, weekSpan } from "@/lib/hq-pipeline";
 import { Modal } from "./modal";
 
 // Finance & Office "Bills & payments", in one place so the tabs work as one system:
 //  - <FinanceWorkspace> owns the items (what arrives), their payments, and the dialogs (intake, an item's card,
-//    record a payment), so the Summary, Tasks, Bills & Payments and Weekly Closing tabs can all open them;
-//  - the Bills & Payments tab, the Summary panel, the "Payments to make" list for the Tasks tab, and the guided closing.
+//    record a payment), so the Business performance, Cash position, Bills and receivables and Week Close tabs can all open them;
+//  - the Bills and receivables tab, the Business performance panel, the Cash position tab, and the guided Week Close.
 // The page supplies the saving (see FinanceActions), so this file never talks to the API.
 
 export type FinanceActions = {
@@ -359,7 +359,7 @@ function ItemForm({ item, onClose, onSaved }: { item?: FinItem; onClose: () => v
               </label>
               <p className="sub full" style={{ margin: 0 }}>
                 {v.owed
-                  ? "It will be flagged as a bill, listed under Payments to make on the Tasks tab, and get a progress bar that fills as payments are recorded."
+                  ? "It will be flagged as a bill, listed in Bills and receivables and in Cash position, and get a progress bar that fills as payments are recorded."
                   : "Nothing to pay. It will be listed as something to file or follow up, and you can mark it done."}
               </p>
               {v.owed && (
@@ -498,7 +498,7 @@ function PaymentForm({ item, onClose }: { item: FinItem; onClose: () => void }) 
   );
 }
 
-// ── The Bills & Payments tab ─────────────────────────────────────────────────
+// ── The Bills and receivables tab ────────────────────────────────────────────
 
 const GROUPS = [
   { id: "overdue", title: "Overdue", hint: "Past the due date. Pay these first." },
@@ -650,12 +650,12 @@ export function FinanceHealth({ onOpenPayables }: { onOpenPayables: () => void }
   const ws = useFinance();
   const next = useMemo(() => inUrgencyOrder(ws.items.filter(needsPaying), ws.today).slice(0, 5), [ws.items, ws.today]);
   return (
-    <section className="card store-health" style={{ marginBottom: 16 }} aria-label="Bills and payments">
+    <section className="card store-health" style={{ marginBottom: 16 }} aria-label="Bills to pay">
       <div className="list-toolbar">
-        <h2 className="section-title" style={{ margin: 0 }}>Bills &amp; payments</h2>
+        <h2 className="section-title" style={{ margin: 0 }}>Bills to pay</h2>
         <div className="chips">
           <button type="button" className="btn primary" onClick={() => ws.open({ kind: "add" })}>＋ Add item</button>
-          <button type="button" className="btn" onClick={onOpenPayables}>Open Bills &amp; Payments →</button>
+          <button type="button" className="btn" onClick={onOpenPayables}>Open Bills and receivables →</button>
         </div>
       </div>
       <TotalTiles />
@@ -673,7 +673,7 @@ export function FinanceHealth({ onOpenPayables }: { onOpenPayables: () => void }
         <summary>How this works</summary>
         <dl className="explain-list">
           <dt>Add item</dt><dd>Each bill, statement or notice is entered once, by kind (credit card, vendor bill, bank account…).</dd>
-          <dt>Money owed</dt><dd>An item with an amount owed is a bill: it appears under Payments to make on the Tasks tab, with a progress bar.</dd>
+          <dt>Money owed</dt><dd>An item with an amount owed is a bill: it appears in Bills and receivables and in Cash position, with a progress bar.</dd>
           <dt>Record a payment</dt><dd>Each payment is added to the bill, so one paid in parts shows how much is left until it is fully paid.</dd>
         </dl>
       </details>
@@ -681,42 +681,74 @@ export function FinanceHealth({ onOpenPayables }: { onOpenPayables: () => void }
   );
 }
 
-/** The Tasks tab's list of what has to be paid or followed up, with each bill's progress. */
-export function PaymentsDue({ onOpenPayables }: { onOpenPayables: () => void }) {
+// ── Cash position: what has to go out, and when ──────────────────────────────
+
+export function CashPosition({ onOpenPayables }: { onOpenPayables: () => void }) {
   const ws = useFinance();
-  const [all, setAll] = useState(false);
-  const list = useMemo(() => inUrgencyOrder(ws.items.filter(i => needsPaying(i) || i.state === "todo"), ws.today), [ws.items, ws.today]);
-  const shown = all ? list : list.slice(0, 8);
+  const buckets = useMemo(() => cashBuckets(ws.items, ws.today), [ws.items, ws.today]);
+  const kinds = useMemo(() => owedByKind(ws.items, ws.today), [ws.items, ws.today]);
+  const paid = useMemo(() => cashPaid(ws.items, ws.today), [ws.items, ws.today]);
+  const [all, setAll] = useState<Record<string, boolean>>({});
+  const bucket = (id: string) => buckets.find(b => b.id === id) as CashBucket;
+  const [overdue, thisWeek, nextWeek] = [bucket("overdue"), bucket("this"), bucket("next")];
+  const further = { amount: Math.round((bucket("after").amount + bucket("later").amount) * 100) / 100, count: bucket("after").items.length + bucket("later").items.length };
+  const tiles = [
+    { label: "Overdue", value: money(overdue.amount), detail: overdue.items.length ? `${plural(overdue.items.length, "bill")} past due` : "Nothing overdue", tone: overdue.items.length ? "peach" : "sage" },
+    { label: "This week", value: money(thisWeek.amount), detail: `${plural(thisWeek.items.length, "bill")} · ${thisWeek.range}`, tone: "yellow" },
+    { label: "Next week", value: money(nextWeek.amount), detail: `${plural(nextWeek.items.length, "bill")} · ${nextWeek.range}`, tone: "lav" },
+    { label: "After that", value: money(further.amount), detail: `${plural(further.count, "bill")} due later`, tone: "blue" },
+    { label: "Paid this month", value: money(paid.month), detail: `${money(paid.week)} paid this week`, tone: "mint" },
+  ];
   return (
-    <section className="card" style={{ marginBottom: 16 }} aria-label="Payments to make">
+    <section className="card" style={{ marginBottom: 16 }} aria-label="Cash position">
       <div className="list-toolbar">
-        <h2 className="section-title" style={{ margin: 0 }}>Payments to make <span className="kanban-count">{list.length}</span></h2>
+        <h2 className="section-title" style={{ margin: 0 }}>Cash position</h2>
         <div className="chips">
-          <button type="button" className="btn" onClick={() => ws.open({ kind: "add" })}>＋ Add item</button>
-          <button type="button" className="btn" onClick={onOpenPayables}>Open Bills &amp; Payments →</button>
+          <button type="button" className="btn primary" onClick={() => ws.open({ kind: "add" })}>＋ Add item</button>
+          <button type="button" className="btn" onClick={onOpenPayables}>Open Bills and receivables →</button>
         </div>
       </div>
-      {list.length ? (
+      <p className="sub" style={{ margin: "0 0 8px" }}>
+        Money still to go out, by the week it is due. Bank balances are not recorded in HQ, so this shows what has to be paid, not what is available to pay it.
+        {ws.totals.owed > 0 && <> <b>{money(ws.totals.owed)}</b> is still to pay across {plural(ws.totals.billsOpen, "open bill")}.</>}
+      </p>
+      <section className="kpis kpis-5 pipe-kpis" aria-label="Money going out">
+        {tiles.map(t => <div className={`card kpi ${t.tone}`} key={t.label}><span className="label">{t.label}</span><strong>{t.value}</strong><small>{t.detail}</small></div>)}
+      </section>
+      {kinds.length > 0 && (
         <>
-          <p className="sub" style={{ margin: "0 0 4px" }}>Bills with money owed, most urgent first. The bar fills as payments are recorded.</p>
-          {shown.map((i, n) => <ItemRow key={`${n}-${i.key}`} item={i} />)}
-          {list.length > 8 && !all && <button type="button" className="btn" style={{ marginTop: 6 }} onClick={() => setAll(true)}>Show all {list.length}</button>}
+          <h3 className="viz-title" style={{ margin: "12px 0 4px" }}>By kind</h3>
+          <div style={{ overflowX: "auto" }}>
+            <table className="channel-table">
+              <thead><tr><th scope="col">Kind</th><th scope="col">Open</th><th scope="col">Still to pay</th><th scope="col">Overdue</th></tr></thead>
+              <tbody>
+                {kinds.map(k => (
+                  <tr key={k.type}><th scope="row">{k.type}</th><td>{k.count}</td><td>{money(k.owed)}</td><td className={k.overdue ? "chan-bad" : undefined}>{k.overdue ? money(k.overdue) : "—"}</td></tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
         </>
-      ) : <p className="sub" style={{ margin: 0 }}>{ws.items.length ? "Nothing to pay or follow up right now." : "No bills entered yet. Add one and it shows up here with a progress bar."}</p>}
+      )}
+      {buckets.map(b => {
+        if (!b.items.length) return null;
+        const shown = all[b.id] ? b.items : b.items.slice(0, GROUP_PAGE);
+        return (
+          <section className="fu-group" key={b.id}>
+            <h3>{b.title} <span className="kanban-count">{b.items.length}</span> <span className="sub">{b.range} · {money(b.amount)} to pay</span></h3>
+            {shown.map((i, n) => <ItemRow key={`${n}-${i.key}`} item={i} />)}
+            {b.items.length > GROUP_PAGE && !all[b.id] && (
+              <button type="button" className="btn" style={{ marginTop: 6 }} onClick={() => setAll(cur => ({ ...cur, [b.id]: true }))}>Show all {b.items.length}</button>
+            )}
+          </section>
+        );
+      })}
+      {!ws.items.some(needsPaying) && <p className="sub" style={{ margin: "12px 0 0" }}>{ws.items.length ? "Nothing is waiting to be paid." : "No bills entered yet. Add one and it shows up here by the week it is due, with a progress bar."}</p>}
     </section>
   );
 }
 
-export function FinanceKpis() {
-  return (
-    <section className="card" style={{ marginBottom: 16 }} aria-label="Bills and payments numbers">
-      <h2 className="section-title">Bills &amp; payments</h2>
-      <TotalTiles />
-    </section>
-  );
-}
-
-// ── Weekly Closing: what was paid -> what is still open -> wrap-up ───────────
+// ── Week Close: what was paid -> what is still open -> wrap-up ───────────────
 
 type WrapFields = { wins: string; misses: string; blockers: string; next: string };
 const NO_FIELDS: WrapFields = { wins: "", misses: "", blockers: "", next: "" };
